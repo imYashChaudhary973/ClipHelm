@@ -79,6 +79,7 @@ struct ProjectRecord: Codable, Identifiable {
     let selectedLengths: [ClipLength]
     var captionStyle: CaptionStyle?
     let mediaAsset: MediaAsset?
+    var transcript: Transcript?
 
     init(draft: ProjectDraft, mediaAsset: MediaAsset? = nil,
          id: ProjectID = ProjectID(), createdAt: Date = .now) throws {
@@ -98,6 +99,7 @@ struct ProjectRecord: Codable, Identifiable {
         selectedLengths = ClipLength.allCases.filter { draft.lengths.contains($0) }
         captionStyle = draft.captionsEnabled ? draft.captionStyle : nil
         self.mediaAsset = mediaAsset
+        transcript = nil
     }
 }
 
@@ -142,7 +144,12 @@ final class ProjectStore: ObservableObject {
                     guard record.schemaVersion == ProjectRecord.currentVersion,
                           package.deletingPathExtension().lastPathComponent == record.id.rawValue.uuidString,
                           !record.title.isEmpty, record.title.count <= 200,
-                          !record.sourceLabel.isEmpty, record.sourceLabel.count <= 255 else {
+                          !record.sourceLabel.isEmpty, record.sourceLabel.count <= 255,
+                          record.transcript.map({ transcript in
+                              guard let asset = record.mediaAsset else { return false }
+                              return transcript.assetID == asset.id &&
+                                  transcript.words.allSatisfy { $0.range.end <= asset.duration }
+                          }) ?? true else {
                         throw ModelError.invalid("ProjectRecord")
                     }
                     loaded.append(record)
@@ -171,4 +178,20 @@ final class ProjectStore: ObservableObject {
         return record
     }
 
+    func saveTranscript(_ transcript: Transcript, for projectID: ProjectID) throws {
+        guard let rootURL, let index = projects.firstIndex(where: { $0.id == projectID }),
+              let asset = projects[index].mediaAsset, transcript.assetID == asset.id,
+              transcript.words.allSatisfy({ $0.range.end <= asset.duration }) else {
+            throw ModelError.invalid("Transcript project mismatch")
+        }
+        var updated = projects[index]
+        updated.transcript = transcript
+        if !transcript.hasMeaningfulSpeech { updated.captionStyle = nil }
+        let data = try JSONEncoder().encode(updated)
+        guard data.count <= 25_000_000 else { throw ModelError.invalid("Transcript too large") }
+        let manifest = rootURL.appending(path: "\(projectID.rawValue.uuidString).cliphelm/project.json")
+        try data.write(to: manifest, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: manifest.path)
+        projects[index] = updated
+    }
 }

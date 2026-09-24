@@ -15,5 +15,6 @@
     <key>CFBundleVersion</key><string>1</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>NSHighResolutionCapable</key><true/>
+    <key>NSSpeechRecognitionUsageDescription</key><string>ClipHelm uses on-device speech recognition to create searchable transcripts of videos you choose. Audio stays on this Mac.</string>
 </dict>
 </plist>

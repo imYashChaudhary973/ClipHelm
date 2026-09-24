@@ -6,10 +6,10 @@ struct AppShell: View {
     @ObservedObject var navigation: NavigationState
     @StateObject private var store: ProjectStore
     @State private var draft = ProjectDraft()
-    @State private var sourceIngestor = SourceIngestor()
-    @State private var sessionSources: [ProjectID: PreparedSource] = [:]
     @State private var errorMessage = ""
     @State private var showsError = false
+    @State private var sourceIngestor = SourceIngestor()
+    @State private var sessionSources: [ProjectID: PreparedSource] = [:]
 
     init(navigation: NavigationState, store: ProjectStore = ProjectStore()) {
         self.navigation = navigation
@@ -21,8 +21,10 @@ struct AppShell: View {
     }
 
     private var inspectorBinding: Binding<Bool> {
-        Binding(get: { navigation.route == .workspace && navigation.inspectorVisible },
-                set: { navigation.inspectorVisible = $0 })
+        Binding(
+            get: { navigation.route == .workspace && navigation.inspectorVisible },
+            set: { navigation.inspectorVisible = $0 }
+        )
     }
 
     var body: some View {
@@ -33,7 +35,9 @@ struct AppShell: View {
                     Label("Recent Projects", systemImage: "clock.arrow.circlepath").tag(AppRoute.recent)
                     Label("New Clip Project", systemImage: "plus.square.on.square").tag(AppRoute.newProject)
                 }
-                Section { Label("Settings", systemImage: "gearshape").tag(AppRoute.settings) }
+                Section {
+                    Label("Settings", systemImage: "gearshape").tag(AppRoute.settings)
+                }
             }
             .listStyle(.sidebar)
             .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 260)
@@ -42,11 +46,17 @@ struct AppShell: View {
                 switch navigation.route {
                 case .home: home
                 case .recent: recent
-                case .newProject: WizardView(draft: $draft, step: $navigation.step, ingestor: sourceIngestor, onSave: saveDraft)
+                case .newProject:
+                    WizardView(draft: $draft, step: $navigation.step,
+                               ingestor: sourceIngestor, onSave: saveDraft)
                 case .settings: settings
                 case .workspace:
-                    if let selectedProject { workspace(selectedProject) }
-                    else { ContentUnavailableView("Project unavailable", systemImage: "folder.badge.questionmark") }
+                    if let selectedProject {
+                        workspace(selectedProject)
+                    } else {
+                        ContentUnavailableView("Project unavailable", systemImage: "folder.badge.questionmark",
+                                               description: Text("Choose a project from Recent Projects."))
+                    }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -54,12 +64,16 @@ struct AppShell: View {
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     if navigation.route == .workspace {
-                        Button { navigation.inspectorVisible.toggle() } label: {
+                        Button {
+                            navigation.inspectorVisible.toggle()
+                        } label: {
                             Label("Inspector", systemImage: "sidebar.right")
                         }
                         .help("Show or hide the inspector (⌘I)")
                     } else {
-                        Button { navigation.startProject() } label: {
+                        Button {
+                            navigation.startProject()
+                        } label: {
                             Label("New Clip Project", systemImage: "plus")
                         }
                         .help("New Clip Project (⌘N)")
@@ -68,18 +82,26 @@ struct AppShell: View {
             }
         }
         .inspector(isPresented: inspectorBinding) {
-            if let selectedProject { inspector(selectedProject) }
+            if let selectedProject {
+                inspector(selectedProject)
+            }
         }
         .alert("Could not save project", isPresented: $showsError) {
             Button("OK", role: .cancel) { }
-        } message: { Text(errorMessage) }
+        } message: {
+            Text(errorMessage)
+        }
         .onAppear {
             if let data = UserDefaults.standard.data(forKey: "draftPreferences"),
-               let restored = try? JSONDecoder().decode(ProjectDraft.self, from: data) { draft = restored }
-            if navigation.route == .workspace && selectedProject == nil { navigation.route = .recent }
+               let restored = try? JSONDecoder().decode(ProjectDraft.self, from: data) {
+                draft = restored
+            }
+            if navigation.route == .workspace && selectedProject == nil {
+                navigation.route = .recent
+            }
         }
-        .onChange(of: draft) { _, value in
-            if let data = try? JSONEncoder().encode(value) {
+        .onChange(of: draft) { _, newValue in
+            if let data = try? JSONEncoder().encode(newValue) {
                 UserDefaults.standard.set(data, forKey: "draftPreferences")
             }
         }
@@ -98,66 +120,131 @@ struct AppShell: View {
     private var home: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                Text("CLIPHELM").font(.caption.weight(.semibold)).tracking(2.5).foregroundStyle(.secondary)
+                Text("CLIPHELM")
+                    .font(.caption.weight(.semibold))
+                    .tracking(2.5)
+                    .foregroundStyle(.secondary)
                 Text("A better cut starts\nwith the right moment.")
                     .font(.system(size: 42, weight: .semibold, design: .rounded))
-                Text("Set the source and edit direction, then save a project draft.")
-                    .font(.title3).foregroundStyle(.secondary)
-                Button("New Clip Project") { navigation.startProject() }
-                    .buttonStyle(.borderedProminent).controlSize(.large)
+                    .tracking(-1.5)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("Set the source and the edit direction. ClipHelm will bring the best moments into a workspace you can review.")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: 640, alignment: .leading)
+                Button("New Clip Project") {
+                    navigation.startProject()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .padding(.top, 8)
+
                 Divider().padding(.vertical, 18)
-                Text("Recent Projects").font(.title2.weight(.semibold))
-                ForEach(store.projects.prefix(3)) { project in projectRow(project) }
+                HStack {
+                    Text("Recent Projects").font(.title2.weight(.semibold))
+                    Spacer()
+                    Button("View All") { navigation.route = .recent }
+                        .buttonStyle(.link)
+                }
+                if store.projects.isEmpty {
+                    Text("Your projects will appear here after you save a draft.")
+                        .foregroundStyle(.secondary)
+                        .padding(.vertical, 20)
+                } else {
+                    ForEach(store.projects.prefix(3)) { project in
+                        projectRow(project)
+                    }
+                }
             }
             .frame(maxWidth: 780, alignment: .leading)
-            .padding(48).frame(maxWidth: .infinity, alignment: .leading)
+            .padding(48)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
     private var recent: some View {
         Group {
             if store.projects.isEmpty {
-                ContentUnavailableView("No Projects Yet", systemImage: "film.stack",
-                    description: Text("Start a new clip project to create a workspace."))
+                ContentUnavailableView {
+                    Label("No Projects Yet", systemImage: "film.stack")
+                } description: {
+                    Text("Start a new clip project to create a workspace.")
+                } actions: {
+                    Button("New Clip Project") {
+                        navigation.startProject()
+                    }
+                }
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
-                        Text("RECENT PROJECTS").font(.caption.weight(.semibold)).tracking(1.6)
-                        ForEach(store.projects) { project in projectRow(project) }
+                        Text("RECENT PROJECTS")
+                            .font(.caption.weight(.semibold))
+                            .tracking(1.6)
+                            .foregroundStyle(.secondary)
+                            .padding(.bottom, 16)
+                        ForEach(store.projects) { project in
+                            projectRow(project)
+                        }
                     }
                     .frame(maxWidth: 800, alignment: .leading)
-                    .padding(40).frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(40)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
+            }
+        }
+        .overlay(alignment: .top) {
+            if let loadError = store.loadError {
+                Text(loadError)
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+                    .padding(12)
             }
         }
     }
 
     private func projectRow(_ project: ProjectRecord) -> some View {
-        Button { navigation.openProject(project.id.rawValue) } label: {
+        Button {
+            navigation.openProject(project.id.rawValue)
+        } label: {
             HStack(spacing: 16) {
-                Image(systemName: "film.stack").font(.title2).frame(width: 36)
-                VStack(alignment: .leading) {
+                Image(systemName: "film.stack")
+                    .font(.title2)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 36)
+                VStack(alignment: .leading, spacing: 4) {
                     Text(project.title).font(.headline)
                     Text("\(project.sourceLabel) · Draft project")
-                        .font(.subheadline).foregroundStyle(.secondary)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Text(project.createdAt, style: .date).foregroundStyle(.secondary)
-                Image(systemName: "chevron.right").foregroundStyle(.tertiary)
+                Text(project.createdAt, style: .date)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
             }
-            .padding(.vertical, 13).contentShape(Rectangle())
+            .padding(.vertical, 13)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("Open \(project.title)")
         .overlay(alignment: .bottom) { Divider() }
     }
 
     private var settings: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 26) {
-                Text("Settings").font(.largeTitle.weight(.semibold))
+                Text("Settings")
+                    .font(.largeTitle.weight(.semibold))
                 LabeledContent("Appearance", value: "Follows macOS")
                 Divider()
                 LabeledContent("Project storage", value: "Application Support / ClipHelm / Projects")
+                Text("Project drafts and source metadata are saved on this Mac. Source access must be granted again after relaunch.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Divider()
                 OpenRouterSettingsView()
                 Divider()
                 Text("Keyboard Shortcuts").font(.headline)
@@ -166,28 +253,42 @@ struct AppShell: View {
                 LabeledContent("Inspector", value: "⌘I")
             }
             .frame(maxWidth: 640, alignment: .leading)
-            .padding(40).frame(maxWidth: .infinity, alignment: .leading)
+            .padding(40)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
     private func workspace(_ project: ProjectRecord) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                Text(project.title).font(.title2.weight(.semibold))
-                Text("Draft workspace").foregroundStyle(.secondary)
-                if let asset = project.mediaAsset {
-                    Text("Source: \(asset.displayName) · \(asset.width) × \(asset.height)")
+        VStack(alignment: .leading, spacing: 20) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(project.title).font(.title2.weight(.semibold))
+                    Text("Draft workspace").foregroundStyle(.secondary)
+                }
+                Spacer()
+                Label("Saved", systemImage: "checkmark.circle")
+                    .foregroundStyle(.secondary)
+            }
+            WorkspacePlaybackView(project: project, source: sessionSources[project.id],
+                saveTranscript: { try store.saveTranscript($0, for: project.id) },
+                reattachSource: { try await reattachSource($0, to: project) })
+            Divider()
+            HStack {
+                Text("Timeline").font(.headline)
+                Spacer()
+                Text("No clips yet").foregroundStyle(.secondary)
+            }
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color(nsColor: .quaternaryLabelColor).opacity(0.35))
+                .frame(height: 68)
+                .overlay {
+                    Text("Clips will appear here after processing")
+                        .font(.callout)
                         .foregroundStyle(.secondary)
                 }
-                WorkspacePlaybackView(project: project, source: sessionSources[project.id])
-                Divider()
-                Text("Timeline").font(.headline)
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(Color(nsColor: .quaternaryLabelColor).opacity(0.35))
-                    .frame(height: 68)
-                    .overlay { Text("Clips will appear here after processing").foregroundStyle(.secondary) }
-            }
-            .padding(24).frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(24)
         }
     }
 
@@ -197,6 +298,10 @@ struct AppShell: View {
                 LabeledContent("Status", value: "Draft")
                 LabeledContent("Source", value: project.sourceLabel)
                 LabeledContent("Type", value: project.sourceKind.rawValue)
+                if let asset = project.mediaAsset {
+                    LabeledContent("Source size", value: "\(asset.width) × \(asset.height)")
+                    LabeledContent("Duration", value: Self.durationLabel(asset.duration))
+                }
             }
             Section("Output") {
                 LabeledContent("Canvas", value: "\(project.outputFormat.width) × \(project.outputFormat.height)")
@@ -219,6 +324,26 @@ struct AppShell: View {
             showsError = true
         }
     }
+
+    private func reattachSource(_ url: URL, to project: ProjectRecord) async throws {
+        guard project.sourceKind == .local, let original = project.mediaAsset,
+              url.lastPathComponent == project.sourceLabel else {
+            throw SourceIngestError.invalidMedia
+        }
+        let prepared = try await sourceIngestor.prepare(SourceDescriptor(localFile: url))
+        guard prepared.asset.duration == original.duration,
+              prepared.asset.width == original.width,
+              prepared.asset.height == original.height else {
+            throw SourceIngestError.invalidMedia
+        }
+        sessionSources[project.id] = PreparedSource(descriptor: prepared.descriptor,
+            fileURL: prepared.fileURL, asset: original)
+    }
+
+    private static func durationLabel(_ duration: MediaTime) -> String {
+        let seconds = duration.microseconds / 1_000_000
+        return "\(seconds / 60):\(String(format: "%02d", seconds % 60))"
+    }
 }
 
 extension FramingMode {
@@ -230,11 +355,12 @@ extension FramingMode {
         case .blurred: "Blurred"
         }
     }
+
     var description: String {
         switch self {
         case .smartAuto: "Follow the subject and important on-screen content."
         case .fullFrame: "Fill the canvas while keeping important content in view."
-        case .classicFullFrame: "Keep the complete original frame, adding bars if needed."
+        case .classicFullFrame: "Keep the complete original frame, adding bars when needed."
         case .blurred: "Keep the full frame over a soft, blurred background."
         }
     }

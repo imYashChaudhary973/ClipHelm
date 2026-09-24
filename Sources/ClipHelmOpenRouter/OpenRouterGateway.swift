@@ -12,6 +12,7 @@ public enum OpenRouterGatewayError: Error, LocalizedError, Equatable, Sendable {
     case networkUnavailable
     case serviceUnavailable
     case invalidResponse
+    case unsupportedTranscription
 
     public var errorDescription: String? {
         switch self {
@@ -20,6 +21,7 @@ public enum OpenRouterGatewayError: Error, LocalizedError, Equatable, Sendable {
         case .networkUnavailable: "Could not reach OpenRouter. Check your connection and try again."
         case .serviceUnavailable: "OpenRouter is unavailable. Try again later."
         case .invalidResponse: "OpenRouter returned an unexpected response. Try again later."
+        case .unsupportedTranscription: "This model could not return word-timed transcription. Choose another transcription model."
         }
     }
 }
@@ -28,6 +30,7 @@ public enum OpenRouterGatewayError: Error, LocalizedError, Equatable, Sendable {
 public protocol OpenRouterGateway: Sendable {
     func testConnection() async throws
     func fetchCatalog(_ filter: CatalogFilter) async throws -> Data
+    func transcribeAudio(_ audio: Data, modelID: String) async throws -> Data
 }
 
 private final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
@@ -72,6 +75,20 @@ public actor LiveOpenRouterGateway: OpenRouterGateway {
         try await perform(path: "/api/v1/models", filter: filter, maximumBytes: 8_000_000)
     }
 
+    public func transcribeAudio(_ audio: Data, modelID: String) async throws -> Data {
+        guard (1...8_000_000).contains(audio.count),
+              (1...200).contains(modelID.count),
+              modelID.unicodeScalars.allSatisfy({ !CharacterSet.whitespacesAndNewlines.contains($0)
+                  && !CharacterSet.controlCharacters.contains($0) }) else {
+            throw OpenRouterGatewayError.invalidResponse
+        }
+        let body = try JSONEncoder().encode(TranscriptionRequest(
+            model: modelID, inputAudio: .init(data: audio.base64EncodedString(), format: "m4a"),
+            responseFormat: "verbose_json", timestampGranularities: ["word"]))
+        return try await perform(path: "/api/v1/audio/transcriptions", filter: nil,
+                                 maximumBytes: 2_000_000, body: body)
+    }
+
     private func perform(path: String, filter: CatalogFilter?, maximumBytes: Int,
                          body: Data? = nil) async throws -> Data {
         var components = URLComponents()
@@ -111,6 +128,7 @@ public actor LiveOpenRouterGateway: OpenRouterGateway {
         case 200..<300: break
         case 401, 403: throw OpenRouterGatewayError.invalidKey
         case 429: throw OpenRouterGatewayError.rateLimited
+        case 400 where body != nil: throw OpenRouterGatewayError.unsupportedTranscription
         case 500..<600: throw OpenRouterGatewayError.serviceUnavailable
         default: throw OpenRouterGatewayError.invalidResponse
         }
@@ -137,6 +155,8 @@ public actor MockOpenRouterGateway: OpenRouterGateway {
     public var connectionError: OpenRouterGatewayError?
     public var catalogs: [CatalogFilter: Data]
     public private(set) var requestedFilters: [CatalogFilter] = []
+    public var transcriptionResponse: Data?
+    public private(set) var transcriptionRequests: [(modelID: String, audioBytes: Int)] = []
 
     public init(catalogs: [CatalogFilter: Data] = [:], connectionError: OpenRouterGatewayError? = nil) {
         self.catalogs = catalogs
@@ -153,4 +173,28 @@ public actor MockOpenRouterGateway: OpenRouterGateway {
         return data
     }
 
+    public func transcribeAudio(_ audio: Data, modelID: String) async throws -> Data {
+        transcriptionRequests.append((modelID, audio.count))
+        guard let transcriptionResponse else { throw OpenRouterGatewayError.invalidResponse }
+        return transcriptionResponse
+    }
+
+    public func setTranscriptionResponse(_ response: Data) {
+        transcriptionResponse = response
+    }
+}
+
+private struct TranscriptionRequest: Encodable {
+    struct Audio: Encodable { let data: String; let format: String }
+    let model: String
+    let inputAudio: Audio
+    let responseFormat: String
+    let timestampGranularities: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case model
+        case inputAudio = "input_audio"
+        case responseFormat = "response_format"
+        case timestampGranularities = "timestamp_granularities"
+    }
 }
