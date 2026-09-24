@@ -10,7 +10,8 @@ public enum OpenRouterTask: String, CaseIterable, Hashable, Sendable {
 
     public var requiredCapabilities: Set<OpenRouterCapability> {
         switch self {
-        case .transcriptReasoning, .clipDiscovery, .clipRanking: [.text]
+        case .transcriptReasoning, .clipRanking: [.text]
+        case .clipDiscovery: [.text, .structuredOutput]
         case .visionAnalysis: [.vision]
         case .structuredClassification: [.text, .structuredOutput]
         case .transcription: [.transcription]

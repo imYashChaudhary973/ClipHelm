@@ -4,7 +4,7 @@ ClipHelm is a local-first native macOS editor. Its own pipeline owns media, time
 
 ## Module boundaries
 
-Dependencies point downward. `ClipHelmCore`, `ClipHelmSecurity`, `ClipHelmOpenRouter`, `ClipHelmMedia`, `ClipHelmSources`, `ClipHelmTranscription`, `ClipHelmAnalysis`, and the `ClipHelmApp` shell are implemented targets. The remaining modules are design boundaries for later phases.
+Dependencies point downward. `ClipHelmCore`, `ClipHelmSecurity`, `ClipHelmOpenRouter`, `ClipHelmMedia`, `ClipHelmSources`, `ClipHelmTranscription`, `ClipHelmAnalysis`, `ClipHelmMoments`, and the `ClipHelmApp` shell are implemented targets. The remaining modules are design boundaries for later phases.
 
 | Module | Owns | May depend on |
 | --- | --- | --- |
@@ -16,7 +16,7 @@ Dependencies point downward. `ClipHelmCore`, `ClipHelmSecurity`, `ClipHelmOpenRo
 | Media | Metadata, source playback, thumbnails, frame sampling, audio extraction, editing proxies | Core |
 | Transcription | Chunked speech-to-word timeline, backend selection and normalization | Core, Media, OpenRouter |
 | Analysis | Local scene, subject, audio activity and pause evidence | Core, Media |
-| Moments | Hierarchical candidates and ranking with optional semantic help | Core, Transcription, Analysis, OpenRouter |
+| Moments | Hierarchical local candidates, bounded semantic scoring, ranking and deduplication | Core, Analysis, OpenRouter |
 | Clipping | `ClipPlanner`: validates proposals/intents and selects source intervals | Core, Moments |
 | Framing | Tracking and crop trajectories for each shot | Core, Analysis |
 | Layouts | Canvas placement for full-frame and blurred compositions | Core, Framing |
@@ -37,6 +37,8 @@ Phase 4 `MediaProbe` is shared by ingestion and editing. `PlaybackEngine` plays 
 Phase 5 `TranscriptEngine` splits source audio into bounded chunks, checks for audible activity, calls one `TranscriptionBackend` per active chunk, validates relative word times, maps them to the source timeline and groups words into speaker-aware segments. `AppleSpeechBackend` requires on-device recognition; `OpenRouterTranscriptionBackend` sends only short audio chunks through `OpenRouterGateway` after an explicit user action. Both produce the same typed transcript. The workspace stores completed transcripts, supports search and seek, and leaves captions off when no words were recognized.
 
 Phase 6 `AnalysisEngine` runs only after the user starts local analysis in the workspace. It samples at most about 3,600 frames with AVFoundation, uses Vision for face/person and text-box detections, measures frame changes, and streams PCM audio in 250 ms windows. Audio windows widen for unusually long recordings to cap stored evidence near 100,000 windows. It combines these into possible scene, motion, pause, subject, screen, and content-type evidence. Each signal carries source-media time, strength, and confidence. Talking head, conversation, screen share, presentation, demo, and gameplay labels are conservative heuristics; uncertain windows remain `unknown`. These confidence values are estimates, not calibrated probabilities, and fall as sampling becomes coarser. Scene boundaries may be seconds off in long recordings; quiet audio is only a possible pause. No vision AI or OpenRouter call occurs. The original source is read only. Completed analysis is stored in a private, disposable, versioned cache; see `PROJECT_FORMAT.md`.
+
+Phase 7 `MomentEngine` partitions transcript and analysis evidence into source-time boundaries, builds duration-aware candidates locally, and sends only bounded candidate excerpts to a user-selected structured-output OpenRouter model. A `ClipProposal` must echo the exact local candidate ID, asset, and range; malformed or extra renderer fields are rejected. Ranking, quality thresholds, repeated-idea removal, duration checks, and count limits remain local. Silent demos use local visual evidence and are labeled for manual review. The workspace runs discovery on request, shows progress, supports cancellation, and can seek to results. No cuts or render specs are made in this phase.
 
 ## Data flow
 

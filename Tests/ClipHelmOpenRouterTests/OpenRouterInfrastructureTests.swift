@@ -136,6 +136,12 @@ final class OpenRouterInfrastructureTests: XCTestCase {
         } catch let error as OpenRouterModelRegistryError {
             XCTAssertEqual(error, .unsupportedTask)
         }
+        do {
+            try await registry.selectModel(id: "vendor/vision", for: .clipDiscovery)
+            XCTFail("Clip discovery requires structured output")
+        } catch let error as OpenRouterModelRegistryError {
+            XCTAssertEqual(error, .unsupportedTask)
+        }
         try await registry.selectModel(id: "vendor/text", for: .structuredClassification)
         let selected = await registry.selectedModel(for: .structuredClassification)
         XCTAssertEqual(selected?.id, "vendor/text")
@@ -171,6 +177,29 @@ final class OpenRouterInfrastructureTests: XCTestCase {
         } catch let error as OpenRouterGatewayError {
             XCTAssertEqual(error, .unsupportedTranscription)
             XCTAssertFalse(error.localizedDescription.contains("secret server text"))
+        }
+    }
+
+    func testClipProposalUsesFixedEndpointStrictSchemaAndBoundedPrompt() async throws {
+        StubURLProtocol.state.configure(status: 200,
+            body: Data(#"{"choices":[{"message":{"content":"{\"title\":\"safe\"}"}}]}"#.utf8))
+        let gateway = stubbedGateway()
+        let content = try await gateway.completeClipProposal(prompt: "A short excerpt", modelID: "vendor/text")
+        XCTAssertEqual(String(decoding: content, as: UTF8.self), #"{"title":"safe"}"#)
+        let request = try XCTUnwrap(StubURLProtocol.state.lastRequest())
+        XCTAssertEqual(request.url?.absoluteString, "https://openrouter.ai/api/v1/chat/completions")
+        XCTAssertEqual(request.httpMethod, "POST")
+        let body = try XCTUnwrap(StubURLProtocol.state.lastRequestBody())
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(json["model"] as? String, "vendor/text")
+        let format = try XCTUnwrap(json["response_format"] as? [String: Any])
+        XCTAssertEqual(format["type"] as? String, "json_schema")
+        XCTAssertFalse(String(decoding: body, as: UTF8.self).contains("unit-test-token"))
+        do {
+            _ = try await gateway.completeClipProposal(prompt: String(repeating: "x", count: 12_001), modelID: "vendor/text")
+            XCTFail("Oversized prompt should be rejected before network use")
+        } catch let error as OpenRouterGatewayError {
+            XCTAssertEqual(error, .invalidResponse)
         }
     }
 }
