@@ -61,6 +61,7 @@ final class SourceIngestorTests: XCTestCase {
         XCTAssertEqual(prepared.asset.height, 48)
         XCTAssertGreaterThan(prepared.asset.duration.microseconds, 0)
         XCTAssertEqual(prepared.fileURL, file)
+        XCTAssertFalse(prepared.hasAudio)
 
         let bad = FileManager.default.temporaryDirectory.appending(path: "bad-\(UUID().uuidString).mp4")
         try Data("not a video".utf8).write(to: bad)

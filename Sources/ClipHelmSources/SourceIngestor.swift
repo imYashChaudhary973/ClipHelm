@@ -167,9 +167,10 @@ public actor SourceIngestor {
             }
             try Task.checkCancellation()
             progress(SourceProgress(stage: .validating))
-            let asset = try await inspect(fileURL, displayName: descriptor.displayLabel)
+            let metadata = try await inspect(fileURL, displayName: descriptor.displayLabel)
             try Task.checkCancellation()
-            let prepared = PreparedSource(descriptor: descriptor, fileURL: fileURL, asset: asset)
+            let prepared = PreparedSource(descriptor: descriptor, fileURL: fileURL,
+                                          asset: metadata.asset, hasAudio: metadata.hasAudio)
             completed[descriptor] = prepared
             return prepared
         } catch {
@@ -195,9 +196,9 @@ public actor SourceIngestor {
         }
     }
 
-    private func inspect(_ url: URL, displayName: String) async throws -> MediaAsset {
+    private func inspect(_ url: URL, displayName: String) async throws -> MediaMetadata {
         do {
-            return try await MediaProbe().probe(fileURL: url, displayName: displayName).asset
+            return try await MediaProbe().probe(fileURL: url, displayName: displayName)
         } catch is CancellationError {
             throw CancellationError()
         } catch {

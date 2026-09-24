@@ -1,6 +1,6 @@
 # ClipHelm
 
-Native macOS clip editor in development. Phase 7 adds local candidate discovery with bounded OpenRouter semantic scoring and workspace review. Clip editing, rendering, and final export are still planned.
+Native macOS clip editor in development. Phase 8 adds the full guided setup and saves its choices as a validated clip configuration. Clip editing, rendering, and final export are still planned.
 
 ## Run
 
@@ -12,6 +12,8 @@ open build/ClipHelm.app
 ```
 
 The app has Home, Recent Projects, New Clip Project, Settings, and Project Workspace. `⌘N` starts a project; `⌘1`/`⌘2` navigate Home/Recent Projects; `⌘,` opens Settings; `⌘I` toggles the workspace inspector. Use `⌘[` and `⌘]` to move through the guided flow when its buttons are enabled.
+
+After choosing a source, set the destination, framing, smart editing options and pacing, clip lengths, target count, sound, and caption style and effects. Review the choices before saving a draft. A source without an audio track starts with captions off; a later transcript with no speech also disables them. Setup stores these preferences but does not run clip editing or normalization yet.
 
 Draft projects are saved under `~/Library/Application Support/ClipHelm/Projects`. They contain choices, a source label, basic media metadata, and completed transcripts, never source file paths or full remote URLs. On relaunch, the app restores navigation, selected project, inspector visibility, and safe draft preferences. Use **Locate Original Video** in a local-source workspace after relaunch to restore playback and transcript seeking. Remote sources must be imported again because their temporary media is session-only.
 

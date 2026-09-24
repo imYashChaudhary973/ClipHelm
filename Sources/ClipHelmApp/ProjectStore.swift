@@ -18,6 +18,12 @@ enum CanvasPreset: String, Codable, CaseIterable, Identifiable {
     var format: OutputFormat { self == .vertical ? .vertical : .horizontal }
 }
 
+enum ClipCountMode: String, Codable, CaseIterable {
+    case aiDecides = "AI decides"
+    case fixed = "Fixed number"
+    case custom = "Custom number"
+}
+
 struct ProjectDraft: Codable, Equatable {
     var title = "Untitled Clip Project"
     var sourceKind: SourceKind = .local
@@ -25,15 +31,25 @@ struct ProjectDraft: Codable, Equatable {
     var remoteURL = ""
     var preset: CanvasPreset = .vertical
     var framingMode: FramingMode = .smartAuto
+    var smartEdit = SmartEditOptions(useVisionForTrickyShots: false, cutDeadAir: true,
+                                     trimLongPauses: true, cleanFillers: false, keepDemos: true)
+    var pacingMode: PacingMode = .balanced
     var lengths: Set<ClipLength> = []
+    var countMode: ClipCountMode = .aiDecides
+    var requestedClipCount = 3
+    var soundMode: SoundMode = .source
     var captionsEnabled = true
     var captionStyle: CaptionStyle = .pop
+    var captionWordByWord = false
+    var captionBlurIn = false
 
     init() { }
 
     // Source names and URLs are intentionally omitted: access must be re-granted after relaunch.
     private enum CodingKeys: String, CodingKey {
-        case title, sourceKind, preset, framingMode, lengths, captionsEnabled, captionStyle
+        case title, sourceKind, preset, framingMode, smartEdit, pacingMode, lengths
+        case countMode, requestedClipCount, soundMode, captionsEnabled, captionStyle
+        case captionWordByWord, captionBlurIn
     }
 
     init(from decoder: Decoder) throws {
@@ -42,9 +58,29 @@ struct ProjectDraft: Codable, Equatable {
         sourceKind = try c.decode(SourceKind.self, forKey: .sourceKind)
         preset = try c.decode(CanvasPreset.self, forKey: .preset)
         framingMode = try c.decode(FramingMode.self, forKey: .framingMode)
+        smartEdit = try c.decodeIfPresent(SmartEditOptions.self, forKey: .smartEdit) ?? smartEdit
+        pacingMode = try c.decodeIfPresent(PacingMode.self, forKey: .pacingMode) ?? pacingMode
         lengths = try c.decode(Set<ClipLength>.self, forKey: .lengths)
+        countMode = try c.decodeIfPresent(ClipCountMode.self, forKey: .countMode) ?? countMode
+        requestedClipCount = try c.decodeIfPresent(Int.self, forKey: .requestedClipCount) ?? requestedClipCount
+        soundMode = try c.decodeIfPresent(SoundMode.self, forKey: .soundMode) ?? soundMode
         captionsEnabled = try c.decode(Bool.self, forKey: .captionsEnabled)
         captionStyle = try c.decode(CaptionStyle.self, forKey: .captionStyle)
+        captionWordByWord = try c.decodeIfPresent(Bool.self, forKey: .captionWordByWord) ?? false
+        captionBlurIn = try c.decodeIfPresent(Bool.self, forKey: .captionBlurIn) ?? false
+    }
+
+    var configuration: ClipConfiguration {
+        get throws {
+            try ClipConfiguration(outputFormat: preset.format, framingMode: framingMode,
+                                  pacingMode: pacingMode,
+                                  selectedLengths: ClipLength.allCases.filter { lengths.contains($0) },
+                                  requestedClipCount: countMode == .aiDecides ? nil : requestedClipCount,
+                                  soundMode: soundMode, captionStyle: captionsEnabled ? captionStyle : nil,
+                                  smartEdit: smartEdit,
+                                  captionWordByWord: captionsEnabled && captionWordByWord,
+                                  captionBlurIn: captionsEnabled && captionBlurIn)
+        }
     }
 
     var sourceLabel: String? {
@@ -66,7 +102,7 @@ struct ProjectDraft: Codable, Equatable {
 }
 
 struct ProjectRecord: Codable, Identifiable {
-    static let currentVersion = 1
+    static let currentVersion = 2
 
     let schemaVersion: Int
     let id: ProjectID
@@ -74,12 +110,14 @@ struct ProjectRecord: Codable, Identifiable {
     let createdAt: Date
     let sourceKind: SourceKind
     let sourceLabel: String
-    let outputFormat: OutputFormat
-    let framingMode: FramingMode
-    let selectedLengths: [ClipLength]
-    var captionStyle: CaptionStyle?
+    var configuration: ClipConfiguration
     let mediaAsset: MediaAsset?
     var transcript: Transcript?
+
+    var outputFormat: OutputFormat { configuration.outputFormat }
+    var framingMode: FramingMode { configuration.framingMode }
+    var selectedLengths: [ClipLength] { configuration.selectedLengths }
+    var captionStyle: CaptionStyle? { configuration.captionStyle }
 
     init(draft: ProjectDraft, mediaAsset: MediaAsset? = nil,
          id: ProjectID = ProjectID(), createdAt: Date = .now) throws {
@@ -94,12 +132,57 @@ struct ProjectRecord: Codable, Identifiable {
         self.createdAt = createdAt
         sourceKind = draft.sourceKind
         self.sourceLabel = sourceLabel
-        outputFormat = draft.preset.format
-        framingMode = draft.framingMode
-        selectedLengths = ClipLength.allCases.filter { draft.lengths.contains($0) }
-        captionStyle = draft.captionsEnabled ? draft.captionStyle : nil
+        configuration = try draft.configuration
         self.mediaAsset = mediaAsset
         transcript = nil
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, id, title, createdAt, sourceKind, sourceLabel
+        case configuration, mediaAsset, transcript
+        case outputFormat, framingMode, selectedLengths, captionStyle
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let version = try c.decode(Int.self, forKey: .schemaVersion)
+        guard version == 1 || version == Self.currentVersion else {
+            throw ModelError.invalid("ProjectRecord version")
+        }
+        schemaVersion = Self.currentVersion
+        id = try c.decode(ProjectID.self, forKey: .id)
+        title = try c.decode(String.self, forKey: .title)
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        sourceKind = try c.decode(SourceKind.self, forKey: .sourceKind)
+        sourceLabel = try c.decode(String.self, forKey: .sourceLabel)
+        mediaAsset = try c.decodeIfPresent(MediaAsset.self, forKey: .mediaAsset)
+        transcript = try c.decodeIfPresent(Transcript.self, forKey: .transcript)
+        if version == 1 {
+            configuration = try ClipConfiguration(
+                outputFormat: c.decode(OutputFormat.self, forKey: .outputFormat),
+                framingMode: c.decode(FramingMode.self, forKey: .framingMode),
+                pacingMode: .balanced,
+                selectedLengths: c.decode([ClipLength].self, forKey: .selectedLengths),
+                requestedClipCount: nil, soundMode: .source,
+                captionStyle: c.decodeIfPresent(CaptionStyle.self, forKey: .captionStyle),
+                smartEdit: SmartEditOptions(useVisionForTrickyShots: false, cutDeadAir: true,
+                                            trimLongPauses: true, cleanFillers: false, keepDemos: true))
+        } else {
+            configuration = try c.decode(ClipConfiguration.self, forKey: .configuration)
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(schemaVersion, forKey: .schemaVersion)
+        try c.encode(id, forKey: .id)
+        try c.encode(title, forKey: .title)
+        try c.encode(createdAt, forKey: .createdAt)
+        try c.encode(sourceKind, forKey: .sourceKind)
+        try c.encode(sourceLabel, forKey: .sourceLabel)
+        try c.encode(configuration, forKey: .configuration)
+        try c.encodeIfPresent(mediaAsset, forKey: .mediaAsset)
+        try c.encodeIfPresent(transcript, forKey: .transcript)
     }
 }
 
@@ -186,7 +269,9 @@ final class ProjectStore: ObservableObject {
         }
         var updated = projects[index]
         updated.transcript = transcript
-        if !transcript.hasMeaningfulSpeech { updated.captionStyle = nil }
+        if !transcript.hasMeaningfulSpeech {
+            updated.configuration = try updated.configuration.disablingCaptions()
+        }
         let data = try JSONEncoder().encode(updated)
         guard data.count <= 25_000_000 else { throw ModelError.invalid("Transcript too large") }
         let manifest = rootURL.appending(path: "\(projectID.rawValue.uuidString).cliphelm/project.json")

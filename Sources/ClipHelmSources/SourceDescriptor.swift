@@ -122,10 +122,12 @@ public struct PreparedSource: Sendable {
     public let descriptor: SourceDescriptor
     public let fileURL: URL
     public let asset: MediaAsset
+    public let hasAudio: Bool
 
-    public init(descriptor: SourceDescriptor, fileURL: URL, asset: MediaAsset) {
+    public init(descriptor: SourceDescriptor, fileURL: URL, asset: MediaAsset, hasAudio: Bool) {
         self.descriptor = descriptor
         self.fileURL = fileURL
         self.asset = asset
+        self.hasAudio = hasAudio
     }
 }

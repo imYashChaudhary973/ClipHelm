@@ -4,7 +4,7 @@ public enum FramingMode: String, Codable, Sendable {
     case smartAuto, fullFrame, classicFullFrame, blurred
 }
 
-public enum PacingMode: String, Codable, Sendable {
+public enum PacingMode: String, Codable, CaseIterable, Sendable {
     case natural, balanced, tight, fast
 }
 
@@ -13,7 +13,7 @@ public enum CaptionStyle: String, Codable, Sendable {
 }
 
 public enum SoundMode: String, Codable, Sendable {
-    case source, mute
+    case source, normalize, mute
 }
 
 public enum ClipLength: String, Codable, CaseIterable, Sendable {
@@ -59,11 +59,11 @@ public struct OutputFormat: Codable, Equatable, Sendable {
 }
 
 public struct SmartEditOptions: Codable, Equatable, Sendable {
-    public let useVisionForTrickyShots: Bool
-    public let cutDeadAir: Bool
-    public let trimLongPauses: Bool
-    public let cleanFillers: Bool
-    public let keepDemos: Bool
+    public var useVisionForTrickyShots: Bool
+    public var cutDeadAir: Bool
+    public var trimLongPauses: Bool
+    public var cleanFillers: Bool
+    public var keepDemos: Bool
 
     public init(useVisionForTrickyShots: Bool, cutDeadAir: Bool,
                 trimLongPauses: Bool, cleanFillers: Bool, keepDemos: Bool) {
@@ -83,13 +83,17 @@ public struct ClipConfiguration: Codable, Equatable, Sendable {
     public let requestedClipCount: Int?
     public let soundMode: SoundMode
     public let captionStyle: CaptionStyle?
+    public let captionWordByWord: Bool
+    public let captionBlurIn: Bool
     public let smartEdit: SmartEditOptions
 
     public init(outputFormat: OutputFormat, framingMode: FramingMode, pacingMode: PacingMode,
                 selectedLengths: [ClipLength], requestedClipCount: Int?, soundMode: SoundMode,
-                captionStyle: CaptionStyle?, smartEdit: SmartEditOptions) throws {
+                captionStyle: CaptionStyle?, smartEdit: SmartEditOptions,
+                captionWordByWord: Bool = false, captionBlurIn: Bool = false) throws {
         guard Set(selectedLengths).count == selectedLengths.count,
-              requestedClipCount.map({ $0 > 0 }) ?? true else {
+              requestedClipCount.map({ (1...1_000).contains($0) }) ?? true,
+              captionStyle != nil || (!captionWordByWord && !captionBlurIn) else {
             throw ModelError.invalid("ClipConfiguration")
         }
         self.outputFormat = outputFormat
@@ -99,12 +103,20 @@ public struct ClipConfiguration: Codable, Equatable, Sendable {
         self.requestedClipCount = requestedClipCount
         self.soundMode = soundMode
         self.captionStyle = captionStyle
+        self.captionWordByWord = captionWordByWord
+        self.captionBlurIn = captionBlurIn
         self.smartEdit = smartEdit
+    }
+
+    public func disablingCaptions() throws -> Self {
+        try Self(outputFormat: outputFormat, framingMode: framingMode, pacingMode: pacingMode,
+                 selectedLengths: selectedLengths, requestedClipCount: requestedClipCount,
+                 soundMode: soundMode, captionStyle: nil, smartEdit: smartEdit)
     }
 
     private enum CodingKeys: String, CodingKey {
         case outputFormat, framingMode, pacingMode, selectedLengths
-        case requestedClipCount, soundMode, captionStyle, smartEdit
+        case requestedClipCount, soundMode, captionStyle, smartEdit, captionWordByWord, captionBlurIn
     }
 
     public init(from decoder: Decoder) throws {
@@ -116,7 +128,9 @@ public struct ClipConfiguration: Codable, Equatable, Sendable {
                       requestedClipCount: c.decodeIfPresent(Int.self, forKey: .requestedClipCount),
                       soundMode: c.decode(SoundMode.self, forKey: .soundMode),
                       captionStyle: c.decodeIfPresent(CaptionStyle.self, forKey: .captionStyle),
-                      smartEdit: c.decode(SmartEditOptions.self, forKey: .smartEdit))
+                      smartEdit: c.decode(SmartEditOptions.self, forKey: .smartEdit),
+                      captionWordByWord: c.decodeIfPresent(Bool.self, forKey: .captionWordByWord) ?? false,
+                      captionBlurIn: c.decodeIfPresent(Bool.self, forKey: .captionBlurIn) ?? false)
     }
 }
 

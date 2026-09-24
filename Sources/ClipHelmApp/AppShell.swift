@@ -307,6 +307,9 @@ struct AppShell: View {
             Section("Output") {
                 LabeledContent("Canvas", value: "\(project.outputFormat.width) × \(project.outputFormat.height)")
                 LabeledContent("Framing", value: project.framingMode.label)
+                LabeledContent("Pacing", value: project.configuration.pacingMode.label)
+                LabeledContent("Number", value: project.configuration.requestedClipCount.map { "Up to \($0)" } ?? "AI decides")
+                LabeledContent("Sound", value: project.configuration.soundMode == .normalize ? "Normalize" : "Original")
                 LabeledContent("Captions", value: project.captionStyle?.label ?? "Off")
             }
         }
@@ -338,7 +341,7 @@ struct AppShell: View {
             throw SourceIngestError.invalidMedia
         }
         sessionSources[project.id] = PreparedSource(descriptor: prepared.descriptor,
-            fileURL: prepared.fileURL, asset: original)
+            fileURL: prepared.fileURL, asset: original, hasAudio: prepared.hasAudio)
     }
 
     private static func durationLabel(_ duration: MediaTime) -> String {
@@ -365,6 +368,10 @@ extension FramingMode {
         case .blurred: "Keep the full frame over a soft, blurred background."
         }
     }
+}
+
+extension PacingMode {
+    var label: String { rawValue.capitalized }
 }
 
 extension CaptionStyle {

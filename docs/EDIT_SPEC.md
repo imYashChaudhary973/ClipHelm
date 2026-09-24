@@ -12,7 +12,7 @@
 | `outputFormat` | Positive canvas width/height, bounded to 16,384 pixels per axis |
 | `framingMode` | `smartAuto`, `fullFrame`, `classicFullFrame`, `blurred` |
 | `pacingMode` | `natural`, `balanced`, `tight`, `fast` |
-| `soundMode` | `source` or `mute` |
+| `soundMode` | `source`, `normalize`, or `mute`; Phase 8 setup offers original and normalize |
 | `captionStyle` | One of eight V1 styles, or `null` for no captions |
 
 All range endpoints are integer microseconds relative to the original asset. A segment's output start is the sum of preceding segment durations. The compiler must check each segment against the resolved asset duration before rendering. Rendering may also reject unsupported codecs, odd frame sizes, missing source media, or unavailable output destinations with typed errors.

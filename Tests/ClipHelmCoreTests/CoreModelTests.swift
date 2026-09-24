@@ -70,6 +70,26 @@ final class CoreModelTests: XCTestCase {
         XCTAssertNoThrow(try spec.validate(for: asset))
     }
 
+    func testConfigurationRejectsInvalidCountAndCaptionEffectsWithoutCaptions() throws {
+        let edit = SmartEditOptions(useVisionForTrickyShots: false, cutDeadAir: true,
+                                    trimLongPauses: true, cleanFillers: false, keepDemos: true)
+        XCTAssertThrowsError(try ClipConfiguration(outputFormat: .vertical, framingMode: .smartAuto,
+            pacingMode: .balanced, selectedLengths: [], requestedClipCount: 0,
+            soundMode: .source, captionStyle: nil, smartEdit: edit))
+        XCTAssertThrowsError(try ClipConfiguration(outputFormat: .vertical, framingMode: .smartAuto,
+            pacingMode: .balanced, selectedLengths: [], requestedClipCount: nil,
+            soundMode: .source, captionStyle: nil, smartEdit: edit, captionWordByWord: true))
+        let anyLength = try ClipConfiguration(outputFormat: .vertical, framingMode: .smartAuto,
+            pacingMode: .balanced, selectedLengths: [], requestedClipCount: nil,
+            soundMode: .normalize, captionStyle: .pop, smartEdit: edit,
+            captionWordByWord: true, captionBlurIn: true)
+        XCTAssertTrue(anyLength.selectedLengths.isEmpty)
+        XCTAssertEqual(try anyLength.disablingCaptions().captionStyle, nil)
+        XCTAssertFalse(try anyLength.disablingCaptions().captionBlurIn)
+        XCTAssertEqual(try JSONDecoder().decode(ClipConfiguration.self,
+            from: JSONEncoder().encode(anyLength)), anyLength)
+    }
+
     func testDecodedInputCannotBypassValidation() throws {
         XCTAssertThrowsError(try JSONDecoder().decode(MediaTime.self, from: Data("-1".utf8)))
         XCTAssertThrowsError(try JSONDecoder().decode(MediaTimeRange.self,

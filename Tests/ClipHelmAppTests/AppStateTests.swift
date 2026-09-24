@@ -35,6 +35,59 @@ final class AppStateTests: XCTestCase {
         XCTAssertFalse(json.contains("video.mp4"))
     }
 
+    func testEveryGuidedChoicePersistsAsConfiguration() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "ClipHelm-Configuration-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        var draft = ProjectDraft()
+        draft.sourceName = "lesson.mov"
+        draft.preset = .horizontal
+        draft.framingMode = .blurred
+        draft.smartEdit = SmartEditOptions(useVisionForTrickyShots: true, cutDeadAir: false,
+                                           trimLongPauses: true, cleanFillers: true, keepDemos: false)
+        draft.pacingMode = .fast
+        draft.lengths = [.minutes2to5, .seconds10to30]
+        draft.countMode = .custom
+        draft.requestedClipCount = 7
+        draft.soundMode = .normalize
+        draft.captionStyle = .neonHeadline
+        draft.captionWordByWord = true
+        draft.captionBlurIn = true
+
+        let saved = try ProjectStore(rootURL: root).save(draft: draft)
+        let restored = try XCTUnwrap(ProjectStore(rootURL: root).projects.first)
+        XCTAssertEqual(restored.configuration, saved.configuration)
+        XCTAssertEqual(restored.configuration.outputFormat, .horizontal)
+        XCTAssertEqual(restored.configuration.selectedLengths, [.seconds10to30, .minutes2to5])
+        XCTAssertEqual(restored.configuration.requestedClipCount, 7)
+        XCTAssertEqual(restored.configuration.soundMode, .normalize)
+        XCTAssertTrue(restored.configuration.smartEdit.useVisionForTrickyShots)
+        XCTAssertTrue(restored.configuration.captionWordByWord)
+        XCTAssertTrue(restored.configuration.captionBlurIn)
+        let manifest = root.appending(path: "\(saved.id.rawValue.uuidString).cliphelm/project.json")
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: manifest)) as? [String: Any])
+        XCTAssertNotNil(json["configuration"])
+        XCTAssertNil(json["outputFormat"])
+    }
+
+    func testVersionOneProjectOpensWithConfigurationDefaults() throws {
+        var draft = ProjectDraft()
+        draft.sourceName = "old.mov"
+        let record = try ProjectRecord(draft: draft)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(record)) as? [String: Any])
+        json["schemaVersion"] = 1
+        json["outputFormat"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(OutputFormat.vertical))
+        json["framingMode"] = FramingMode.smartAuto.rawValue
+        json["selectedLengths"] = [ClipLength.minutes1to2.rawValue]
+        json["captionStyle"] = CaptionStyle.pop.rawValue
+        json.removeValue(forKey: "configuration")
+        let restored = try JSONDecoder().decode(ProjectRecord.self, from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertEqual(restored.schemaVersion, ProjectRecord.currentVersion)
+        XCTAssertEqual(restored.configuration.selectedLengths, [.minutes1to2])
+        XCTAssertNil(restored.configuration.requestedClipCount)
+        XCTAssertEqual(restored.configuration.soundMode, .source)
+    }
+
     func testNavigationRestores() throws {
         let suite = "ClipHelm-Test-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -59,6 +112,11 @@ final class AppStateTests: XCTestCase {
         draft.sourceName = "private.mov"
         draft.preset = .horizontal
         draft.lengths = [.minutes2to5]
+        draft.pacingMode = .tight
+        draft.countMode = .custom
+        draft.requestedClipCount = 12
+        draft.soundMode = .normalize
+        draft.captionBlurIn = true
 
         let data = try JSONEncoder().encode(draft)
         let json = try XCTUnwrap(String(data: data, encoding: .utf8))
@@ -67,6 +125,11 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(restored.title, "A long interview")
         XCTAssertEqual(restored.preset, .horizontal)
         XCTAssertEqual(restored.lengths, [.minutes2to5])
+        XCTAssertEqual(restored.pacingMode, .tight)
+        XCTAssertEqual(restored.countMode, .custom)
+        XCTAssertEqual(restored.requestedClipCount, 12)
+        XCTAssertEqual(restored.soundMode, .normalize)
+        XCTAssertTrue(restored.captionBlurIn)
         XCTAssertNil(restored.sourceLabel)
     }
 
@@ -89,9 +152,15 @@ final class AppStateTests: XCTestCase {
             XCTAssertTrue(hosting.fittingSize.height.isFinite)
         }
         navigation.startProject()
-        hosting.layoutSubtreeIfNeeded()
-        XCTAssertTrue(hosting.fittingSize.width.isFinite)
-        XCTAssertTrue(hosting.fittingSize.height.isFinite)
+        for step in WizardStep.allCases {
+            navigation.step = step
+            for size in [NSSize(width: 780, height: 560), NSSize(width: 1440, height: 900)] {
+                hosting.frame = NSRect(origin: .zero, size: size)
+                hosting.layoutSubtreeIfNeeded()
+                XCTAssertTrue(hosting.fittingSize.width.isFinite, "\(step.title) at \(size)")
+                XCTAssertTrue(hosting.fittingSize.height.isFinite, "\(step.title) at \(size)")
+            }
+        }
 
         var draft = ProjectDraft()
         draft.sourceName = "layout.mp4"
@@ -126,6 +195,8 @@ final class AppStateTests: XCTestCase {
         try store.saveTranscript(empty, for: project.id)
         let restored = try XCTUnwrap(ProjectStore(rootURL: root).projects.first)
         XCTAssertNil(restored.captionStyle)
+        XCTAssertFalse(restored.configuration.captionWordByWord)
+        XCTAssertFalse(restored.configuration.captionBlurIn)
         XCTAssertEqual(restored.transcript, empty)
         let manifest = root.appending(path: "\(project.id.rawValue.uuidString).cliphelm/project.json")
         let mode = try FileManager.default.attributesOfItem(atPath: manifest.path)[.posixPermissions] as? NSNumber
