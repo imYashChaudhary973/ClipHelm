@@ -19,7 +19,7 @@ The Source step accepts MP4 and MOV, plus MKV when AVFoundation can decode it. C
 
 The media engine uses AVFoundation first. When this Mac's AVFoundation decoder cannot create frames or exports, an installed FFmpeg at `/opt/homebrew/bin/ffmpeg` or `/usr/local/bin/ffmpeg` provides a local fallback. No network protocol is enabled in that fallback. A large source creates a 720p editing proxy in temporary storage; its source timeline remains the source of truth. Original media is read only.
 
-Settings → OpenRouter lets you add, test, replace, or remove one API key. The key is stored only in macOS Keychain. Test checks the key without model inference or API spend. Model discovery reads OpenRouter's live catalog; no model is hardcoded or called in this phase.
+Settings → OpenRouter lets you add, test, replace, or remove one API key. The key is stored only in the macOS login Keychain. Test checks the key without model inference or API spend. Model discovery reads OpenRouter's live catalog; no model is hardcoded.
 
 In a workspace, choose **Transcribe on This Mac** to use Apple's on-device speech recognition. macOS may ask for Speech Recognition permission. The transcript has word times and optional confidence/speaker metadata; search it or click a row to seek. Silent or speech-free results turn captions off. OpenRouter transcription is optional: choose it, load the catalog, select a transcription model, then explicitly start the paid request. ClipHelm sends extracted short audio chunks through its OpenRouter gateway, never the original video. Some catalog models may not provide word timing and will be rejected.
 

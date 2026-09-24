@@ -2,7 +2,7 @@
 
 ## OpenRouter credential
 
-The only external AI credential is an OpenRouter API key. `OpenRouterSecretVault` stores it as a macOS data-protection Keychain generic-password item with a dedicated service/account identifier and `WhenUnlockedThisDeviceOnly` accessibility. The key is never serialized into UserDefaults, project files, databases, JSON, plist, logs, telemetry, crash reports, source code, or subprocess arguments. Authorization headers and response bodies are never logged. A missing or inaccessible key fails closed with a user-facing error.
+The only external AI credential is an OpenRouter API key. `OpenRouterSecretVault` stores it as a non-synchronizable generic-password item in the macOS login Keychain, with a dedicated service/account identifier. This avoids the application entitlement required for data-protection Keychain writes in the locally ad hoc signed build. The vault can still read and remove an older data-protection item when the process has access to it. The key is never serialized into UserDefaults, project files, databases, JSON, plist, logs, telemetry, crash reports, source code, or subprocess arguments. Authorization headers and response bodies are never logged. A missing or inaccessible key fails closed with a user-facing error.
 
 `LiveOpenRouterGateway` obtains the key from the vault at request time and injects it into the HTTPS header in process memory. It uses an ephemeral URL session, fixed OpenRouter HTTPS endpoints, refuses redirects, bounds response bytes, and maps HTTP/network failures to sanitized errors without returning server text. The Settings Test action uses only the key-inspection endpoint; it does not run a model. Model IDs and task capabilities are fetched/configured through the gateway, not frozen into core models. Tests inject a fake vault and a mocked gateway; tests make no paid calls.
 
@@ -31,4 +31,4 @@ Phase 7 moment discovery uses the same Keychain credential and fixed OpenRouter 
 
 ## Verification status
 
-Core decoding rejects malformed timing, geometry, scores, unsupported spec versions, and invalid proposals. Phase 2 tests check the gateway's fixed endpoint, authorization placement, sanitized error, catalog capability selection, and rejected malformed key input. The live Keychain save/replace/remove test is skipped when macOS reports `errSecNotAvailable` for this test process; it must pass in an unrestricted signed macOS app/test environment before Keychain behavior is considered verified.
+Core decoding rejects malformed timing, geometry, scores, unsupported spec versions, and invalid proposals. Gateway tests check the fixed endpoint, authorization placement, sanitized errors, catalog capability selection, and rejected malformed key input. The Keychain save/replace/remove test uses a unique test service and runs without API spend.
