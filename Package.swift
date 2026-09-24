@@ -6,12 +6,18 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .library(name: "ClipHelmCore", targets: ["ClipHelmCore"]),
+        .library(name: "ClipHelmSecurity", targets: ["ClipHelmSecurity"]),
+        .library(name: "ClipHelmOpenRouter", targets: ["ClipHelmOpenRouter"]),
         .executable(name: "ClipHelmApp", targets: ["ClipHelmApp"]),
     ],
     targets: [
         .target(name: "ClipHelmCore"),
-        .executableTarget(name: "ClipHelmApp", dependencies: ["ClipHelmCore"]),
+        .target(name: "ClipHelmSecurity"),
+        .target(name: "ClipHelmOpenRouter", dependencies: ["ClipHelmSecurity"]),
+        .executableTarget(name: "ClipHelmApp", dependencies: ["ClipHelmCore", "ClipHelmSecurity", "ClipHelmOpenRouter"]),
         .testTarget(name: "ClipHelmCoreTests", dependencies: ["ClipHelmCore"]),
+        .testTarget(name: "ClipHelmSecurityTests", dependencies: ["ClipHelmSecurity"]),
+        .testTarget(name: "ClipHelmOpenRouterTests", dependencies: ["ClipHelmOpenRouter", "ClipHelmSecurity"]),
         .testTarget(name: "ClipHelmAppTests", dependencies: ["ClipHelmApp", "ClipHelmCore"]),
     ]
 )

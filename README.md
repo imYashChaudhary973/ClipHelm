@@ -1,6 +1,6 @@
 # ClipHelm
 
-Native macOS clip editor in development. Phase 1 adds the Home, Recent Projects, New Clip Project, Settings and Project Workspace shell. The guided flow saves draft choices; media processing is planned.
+Native macOS clip editor in development. Phase 2 adds one OpenRouter credential stored only in macOS Keychain, a sanitized gateway, model discovery, and connection settings. Clip processing is planned.
 
 ## Run
 
@@ -11,4 +11,4 @@ scripts/build-app.sh
 open build/ClipHelm.app
 ```
 
-Run `swift test --disable-sandbox` for core validation and app restoration/layout checks. Architecture is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Settings → OpenRouter can add, test, replace, or remove a key. Model discovery is capability-based. Tests use mocks and do not spend API credits. Run `swift test --disable-sandbox`. See [architecture](docs/ARCHITECTURE.md) and [security](docs/SECURITY.md).
