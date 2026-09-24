@@ -18,11 +18,12 @@ let package = Package(
         .target(name: "ClipHelmOpenRouter", dependencies: ["ClipHelmSecurity"]),
         .target(name: "ClipHelmMedia", dependencies: ["ClipHelmCore"]),
         .target(name: "ClipHelmSources", dependencies: ["ClipHelmCore", "ClipHelmMedia"]),
-        .executableTarget(name: "ClipHelmApp", dependencies: ["ClipHelmCore", "ClipHelmSecurity", "ClipHelmOpenRouter", "ClipHelmSources"]),
+        .executableTarget(name: "ClipHelmApp", dependencies: ["ClipHelmCore", "ClipHelmSecurity", "ClipHelmOpenRouter", "ClipHelmSources", "ClipHelmMedia"]),
         .testTarget(name: "ClipHelmCoreTests", dependencies: ["ClipHelmCore"]),
         .testTarget(name: "ClipHelmSecurityTests", dependencies: ["ClipHelmSecurity"]),
         .testTarget(name: "ClipHelmOpenRouterTests", dependencies: ["ClipHelmOpenRouter", "ClipHelmSecurity"]),
         .testTarget(name: "ClipHelmSourcesTests", dependencies: ["ClipHelmSources", "ClipHelmCore"], resources: [.process("Fixtures")]),
+        .testTarget(name: "ClipHelmMediaTests", dependencies: ["ClipHelmMedia", "ClipHelmCore"], resources: [.process("Fixtures")]),
         .testTarget(name: "ClipHelmAppTests", dependencies: ["ClipHelmApp", "ClipHelmCore"]),
     ]
 )
