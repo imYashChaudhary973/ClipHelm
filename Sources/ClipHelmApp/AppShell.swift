@@ -1,10 +1,13 @@
 import SwiftUI
 import ClipHelmCore
+import ClipHelmSources
 
 struct AppShell: View {
     @ObservedObject var navigation: NavigationState
     @StateObject private var store: ProjectStore
     @State private var draft = ProjectDraft()
+    @State private var sourceIngestor = SourceIngestor()
+    @State private var sessionSources: [ProjectID: PreparedSource] = [:]
     @State private var errorMessage = ""
     @State private var showsError = false
 
@@ -39,7 +42,7 @@ struct AppShell: View {
                 switch navigation.route {
                 case .home: home
                 case .recent: recent
-                case .newProject: WizardView(draft: $draft, step: $navigation.step, onSave: saveDraft)
+                case .newProject: WizardView(draft: $draft, step: $navigation.step, ingestor: sourceIngestor, onSave: saveDraft)
                 case .settings: settings
                 case .workspace:
                     if let selectedProject { workspace(selectedProject) }
@@ -172,6 +175,10 @@ struct AppShell: View {
             VStack(alignment: .leading, spacing: 20) {
                 Text(project.title).font(.title2.weight(.semibold))
                 Text("Draft workspace").foregroundStyle(.secondary)
+                if let asset = project.mediaAsset {
+                    Text("Source: \(asset.displayName) · \(asset.width) × \(asset.height)")
+                        .foregroundStyle(.secondary)
+                }
                 Divider()
                 Text("Timeline").font(.headline)
                 RoundedRectangle(cornerRadius: 6)
@@ -200,9 +207,10 @@ struct AppShell: View {
         .inspectorColumnWidth(min: 240, ideal: 280, max: 340)
     }
 
-    private func saveDraft() {
+    private func saveDraft(source: PreparedSource?) {
         do {
-            let project = try store.save(draft: draft)
+            let project = try store.save(draft: draft, mediaAsset: source?.asset)
+            if let source { sessionSources[project.id] = source }
             draft = ProjectDraft()
             navigation.openProject(project.id.rawValue)
         } catch {
