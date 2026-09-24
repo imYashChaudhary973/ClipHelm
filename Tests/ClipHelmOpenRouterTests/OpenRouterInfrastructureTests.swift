@@ -146,4 +146,31 @@ final class OpenRouterInfrastructureTests: XCTestCase {
         let requestedFilters = await gateway.requestedFilters
         XCTAssertEqual(Set(requestedFilters), Set([.all, .transcription]))
     }
+
+    func testTranscriptionUsesFixedEndpointAndDoesNotPutKeyInBody() async throws {
+        StubURLProtocol.state.configure(status: 200, body: Data(#"{"text":"","words":[]}"#.utf8))
+        let result = try await stubbedGateway().transcribeAudio(Data([1, 2, 3]), modelID: "vendor/speech")
+        XCTAssertFalse(result.isEmpty)
+        let request = try XCTUnwrap(StubURLProtocol.state.lastRequest())
+        XCTAssertEqual(request.url?.absoluteString, "https://openrouter.ai/api/v1/audio/transcriptions")
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer unit-test-token")
+        let body = try XCTUnwrap(StubURLProtocol.state.lastRequestBody())
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(json["model"] as? String, "vendor/speech")
+        XCTAssertEqual(json["response_format"] as? String, "verbose_json")
+        XCTAssertEqual(json["timestamp_granularities"] as? [String], ["word"])
+        XCTAssertEqual((json["input_audio"] as? [String: String])?["data"], "AQID")
+        XCTAssertFalse(String(decoding: body, as: UTF8.self).contains("unit-test-token"))
+
+        StubURLProtocol.state.configure(status: 400,
+            body: Data(#"{"error":"secret server text"}"#.utf8))
+        do {
+            _ = try await stubbedGateway().transcribeAudio(Data([1]), modelID: "vendor/speech")
+            XCTFail("Unsupported word output should fail")
+        } catch let error as OpenRouterGatewayError {
+            XCTAssertEqual(error, .unsupportedTranscription)
+            XCTAssertFalse(error.localizedDescription.contains("secret server text"))
+        }
+    }
 }

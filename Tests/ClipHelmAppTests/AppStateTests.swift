@@ -74,10 +74,13 @@ final class AppStateTests: XCTestCase {
         let suite = "ClipHelm-Layout-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        let root = FileManager.default.temporaryDirectory.appending(path: "ClipHelm-Layout-\(UUID().uuidString)")
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "ClipHelm-Layout-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
+
         let navigation = NavigationState(defaults: defaults)
-        let shell = AppShell(navigation: navigation, store: ProjectStore(rootURL: root))
+        let store = ProjectStore(rootURL: root)
+        let shell = AppShell(navigation: navigation, store: store)
         let hosting = NSHostingView(rootView: shell)
         for size in [NSSize(width: 780, height: 560), NSSize(width: 1440, height: 900)] {
             hosting.frame = NSRect(origin: .zero, size: size)
@@ -88,5 +91,44 @@ final class AppStateTests: XCTestCase {
         navigation.startProject()
         hosting.layoutSubtreeIfNeeded()
         XCTAssertTrue(hosting.fittingSize.width.isFinite)
+        XCTAssertTrue(hosting.fittingSize.height.isFinite)
+
+        var draft = ProjectDraft()
+        draft.sourceName = "layout.mp4"
+        let asset = try MediaAsset(id: AssetID(), displayName: "layout.mp4",
+            duration: MediaTime(microseconds: 1_000_000), width: 64, height: 64)
+        let project = try store.save(draft: draft, mediaAsset: asset)
+        let word = try TranscriptWord(text: "Hello",
+            range: MediaTimeRange(start: MediaTime(microseconds: 100_000),
+                                  end: MediaTime(microseconds: 300_000)))
+        try store.saveTranscript(try Transcript(assetID: asset.id, words: [word]), for: project.id)
+        navigation.openProject(project.id.rawValue)
+        for size in [NSSize(width: 780, height: 560), NSSize(width: 1440, height: 900)] {
+            hosting.frame = NSRect(origin: .zero, size: size)
+            hosting.layoutSubtreeIfNeeded()
+            XCTAssertTrue(hosting.fittingSize.width.isFinite)
+            XCTAssertTrue(hosting.fittingSize.height.isFinite)
+        }
+    }
+
+    func testSilentTranscriptPersistsAndTurnsCaptionsOff() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "ClipHelm-Transcript-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        var draft = ProjectDraft()
+        draft.sourceName = "quiet.mp4"
+        let asset = try MediaAsset(id: AssetID(), displayName: "quiet.mp4",
+            duration: MediaTime(microseconds: 1_000_000), width: 64, height: 64)
+        let store = ProjectStore(rootURL: root)
+        let project = try store.save(draft: draft, mediaAsset: asset)
+        XCTAssertEqual(project.captionStyle, .pop)
+        let empty = try Transcript(assetID: asset.id, segments: [])
+        try store.saveTranscript(empty, for: project.id)
+        let restored = try XCTUnwrap(ProjectStore(rootURL: root).projects.first)
+        XCTAssertNil(restored.captionStyle)
+        XCTAssertEqual(restored.transcript, empty)
+        let manifest = root.appending(path: "\(project.id.rawValue.uuidString).cliphelm/project.json")
+        let mode = try FileManager.default.attributesOfItem(atPath: manifest.path)[.posixPermissions] as? NSNumber
+        XCTAssertEqual(mode?.intValue, 0o600)
     }
 }

@@ -9,6 +9,18 @@ enum FFmpegMediaAdapter {
             .first { FileManager.default.isExecutableFile(atPath: $0.path) }
     }
 
+    static func hasSound(fileURL: URL) async throws -> Bool {
+        guard let executable, fileURL.isFileURL else { throw MediaEngineError.processingFailed }
+        let command = FFmpegProcess(executable: executable,
+            arguments: ["-nostdin", "-hide_banner", "-loglevel", "error", "-protocol_whitelist", "file,pipe",
+                        "-i", fileURL.path, "-vn", "-ac", "1", "-ar", "16000", "-f", "s16le", "pipe:1"])
+        return try await withTaskCancellationHandler {
+            try await Task.detached { try command.hasSound() }.value
+        } onCancel: {
+            command.terminate()
+        }
+    }
+
     static func proxy(source: URL, output: URL, width: Int, height: Int, duration: MediaTime,
                       progress: @escaping MediaProgressHandler) async throws {
         let targetWidth = min(1280, width)
@@ -125,5 +137,31 @@ private final class FFmpegProcess: @unchecked Sendable {
         }
         process.waitUntilExit()
         guard process.terminationStatus == 0 else { throw MediaEngineError.processingFailed }
+    }
+
+    func hasSound() throws -> Bool {
+        lock.lock()
+        if cancelled { lock.unlock(); throw CancellationError() }
+        do { try process.run() } catch { lock.unlock(); throw MediaEngineError.processingFailed }
+        lock.unlock()
+        let handle = output.fileHandleForReading
+        var activeSamples = 0
+        while true {
+            let chunk = handle.readData(ofLength: 4096)
+            if chunk.isEmpty { break }
+            for index in stride(from: 0, to: chunk.count - chunk.count % 2, by: 2) {
+                let value = Int16(bitPattern: UInt16(chunk[index]) | (UInt16(chunk[index + 1]) << 8))
+                if abs(Int(value)) > 131 { activeSamples += 1 }
+            }
+            if activeSamples >= 1_280 {
+                terminate()
+                process.waitUntilExit()
+                return true
+            }
+        }
+        process.waitUntilExit()
+        if cancelled { throw CancellationError() }
+        guard process.terminationStatus == 0 else { throw MediaEngineError.processingFailed }
+        return false
     }
 }
