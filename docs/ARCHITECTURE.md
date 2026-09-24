@@ -4,7 +4,7 @@ ClipHelm is a local-first native macOS editor. Its own pipeline owns media, time
 
 ## Module boundaries
 
-Dependencies point downward. `ClipHelmCore`, `ClipHelmSecurity`, `ClipHelmOpenRouter`, `ClipHelmMedia` (probe), `ClipHelmSources`, and the app shell are implemented. Other modules are design boundaries for later phases.
+Dependencies point downward. `ClipHelmCore`, `ClipHelmSecurity`, `ClipHelmOpenRouter`, `ClipHelmMedia`, `ClipHelmSources`, and the app shell are implemented. Other modules are design boundaries for later phases.
 
 | Module | Owns | May depend on |
 | --- | --- | --- |
@@ -48,4 +48,4 @@ Clip discovery may ask OpenRouter for meaning and ranking, but local evidence su
 - V1 UI offers 9:16 and 16:9. `OutputFormat` stores dimensions so 1:1, 4:5, and custom canvases can be added without changing the time model.
 - Captions are based on word timings and may animate per word or blur in. When no meaningful speech exists, the planner leaves captions disabled by default.
 
-The Phase 1 app saves draft choices. Phase 2 adds the Keychain vault, sanitized OpenRouter gateway, settings, and model registry. Phase 3 adds `SourceIngestor` for validated local and authorized remote media. Editing remains a later phase.
+The Phase 1 app saves draft choices. Phase 2 adds the Keychain vault, sanitized OpenRouter gateway, settings, and model registry. Phase 3 adds `SourceIngestor` for validated local and authorized remote media. Phase 4 adds playback, thumbnails, frame sampling, audio extraction and editing proxies. Editing remains a later phase.

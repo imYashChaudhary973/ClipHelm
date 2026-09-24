@@ -179,6 +179,7 @@ struct AppShell: View {
                     Text("Source: \(asset.displayName) · \(asset.width) × \(asset.height)")
                         .foregroundStyle(.secondary)
                 }
+                WorkspacePlaybackView(project: project, source: sessionSources[project.id])
                 Divider()
                 Text("Timeline").font(.headline)
                 RoundedRectangle(cornerRadius: 6)
