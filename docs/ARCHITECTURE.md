@@ -40,6 +40,8 @@ Phase 6 `AnalysisEngine` runs only after the user starts local analysis in the w
 
 Phase 7 `MomentEngine` partitions transcript and analysis evidence into source-time boundaries, builds duration-aware candidates locally, and sends only bounded candidate excerpts to a user-selected structured-output OpenRouter model. A `ClipProposal` must echo the exact local candidate ID, asset, and range; malformed or extra renderer fields are rejected. Ranking, quality thresholds, repeated-idea removal, duration checks, and count limits remain local. Silent demos use local visual evidence and are labeled for manual review. The workspace runs discovery on request, shows progress, supports cancellation, and can seek to results. No cuts or render specs are made in this phase.
 
+Phase 8 extends the guided project setup with destination, framing, smart editing, pacing, multiple lengths, count target, sound, and caption effects. The SwiftUI draft converts to one validated `ClipConfiguration` at save time. The project manifest stores that core value; the clipping engine has no dependency on SwiftUI or draft state. A source without an audio track starts with captions off, and an empty transcript clears caption choices. Sound normalization and editing toggles are stored preferences for later processing phases, not active processing in setup.
+
 ## Data flow
 
 ```text

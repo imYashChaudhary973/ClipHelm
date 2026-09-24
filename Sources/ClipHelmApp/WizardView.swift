@@ -70,7 +70,10 @@ struct WizardView: View {
                             if let next = WizardStep(rawValue: step.rawValue + 1) { step = next }
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(step == .source && prepared == nil)
+                        .disabled((step == .source && prepared == nil) ||
+                                  (step == .review && !validTitle) ||
+                                  (step == .number && draft.countMode != .aiDecides &&
+                                   !(1...1_000).contains(draft.requestedClipCount)))
                         .keyboardShortcut("]", modifiers: .command)
                     }
                 }
@@ -97,9 +100,12 @@ struct WizardView: View {
     private var subtitle: String {
         switch step {
         case .source: "Choose the video you have permission to process."
-        case .format: "Choose where the final clips will be seen."
+        case .format: "Choose the shape of the final clips."
         case .framing: "Decide how source footage fits the output canvas."
+        case .smartEditing: "Choose which cleanup tools ClipHelm may use."
         case .length: "Choose one or more ranges, or leave them open."
+        case .number: "Let quality determine the count, or set a target."
+        case .sound: "Choose how clip audio should be handled."
         case .captions: "Choose a starting style for speech captions."
         case .review: "Check the direction before saving a project draft."
         case .process: "Your draft is ready. Processing is coming in a later phase."
@@ -112,7 +118,10 @@ struct WizardView: View {
         case .source: sourceContent
         case .format: formatContent
         case .framing: framingContent
+        case .smartEditing: smartEditingContent
         case .length: lengthContent
+        case .number: numberContent
+        case .sound: soundContent
         case .captions: captionContent
         case .review: reviewContent
         case .process: processContent
@@ -209,10 +218,29 @@ struct WizardView: View {
         }
     }
 
+    private var smartEditingContent: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Toggle("Check tricky shots with AI Vision", isOn: $draft.smartEdit.useVisionForTrickyShots)
+            Toggle("Cut dead air", isOn: $draft.smartEdit.cutDeadAir)
+            Toggle("Trim long pauses", isOn: $draft.smartEdit.trimLongPauses)
+            Toggle("Filter filler words", isOn: $draft.smartEdit.cleanFillers)
+            Toggle("Keep demos", isOn: $draft.smartEdit.keepDemos)
+            Divider()
+            Picker("Pacing", selection: $draft.pacingMode) {
+                ForEach(PacingMode.allCases, id: \.self) { mode in
+                    Text(mode.label).tag(mode)
+                }
+            }
+            .frame(maxWidth: 320)
+            Text("AI Vision is used only for uncertain shots. These choices will guide later editing; no edits run during setup.")
+                .font(.callout).foregroundStyle(.secondary)
+        }
+    }
+
     private var lengthContent: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Clip lengths").font(.headline)
-            Text("Select any combination. No selection means unrestricted length.")
+            Text("Select any combination. Nothing selected means Any Length.")
                 .foregroundStyle(.secondary)
             ForEach(ClipLength.allCases, id: \.self) { length in
                 Toggle(length.label, isOn: Binding(
@@ -226,6 +254,53 @@ struct WizardView: View {
         }
     }
 
+    private var numberContent: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Picker("Number of clips", selection: $draft.countMode) {
+                ForEach(ClipCountMode.allCases, id: \.self) { mode in
+                    Text(mode.rawValue).tag(mode)
+                }
+            }
+            .pickerStyle(.radioGroup)
+            .onChange(of: draft.countMode) { _, mode in
+                if mode == .fixed && ![1, 3, 5, 10].contains(draft.requestedClipCount) {
+                    draft.requestedClipCount = 3
+                }
+            }
+            if draft.countMode == .fixed {
+                Picker("Target", selection: $draft.requestedClipCount) {
+                    ForEach([1, 3, 5, 10], id: \.self) { count in
+                        Text("\(count) clips").tag(count)
+                    }
+                }
+                .frame(maxWidth: 250)
+            } else if draft.countMode == .custom {
+                TextField("Target", value: $draft.requestedClipCount, format: .number)
+                    .frame(maxWidth: 120)
+                if !(1...1_000).contains(draft.requestedClipCount) {
+                    Text("Enter a number from 1 to 1,000.")
+                        .foregroundStyle(.red)
+                }
+            }
+            Text("ClipHelm may return fewer clips if the source has fewer strong moments.")
+                .font(.callout).foregroundStyle(.secondary)
+        }
+    }
+
+    private var soundContent: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Picker("Sound", selection: $draft.soundMode) {
+                Text("Original").tag(SoundMode.source)
+                Text("Normalize").tag(SoundMode.normalize)
+            }
+            .pickerStyle(.radioGroup)
+            Text(draft.soundMode == .normalize
+                 ? "Aim for more consistent loudness across clips."
+                 : "Keep the source audio level.")
+                .foregroundStyle(.secondary)
+        }
+    }
+
     private var captionContent: some View {
         VStack(alignment: .leading, spacing: 18) {
             Toggle("Create captions when speech is present", isOn: $draft.captionsEnabled)
@@ -234,8 +309,12 @@ struct WizardView: View {
                     ForEach(captionStyles, id: \.self) { style in Text(style.label).tag(style) }
                 }
                 .frame(maxWidth: 340)
+                Toggle("Word-by-word animation", isOn: $draft.captionWordByWord)
+                Toggle("Blur-in", isOn: $draft.captionBlurIn)
             }
-            Text("Captions will stay off when no meaningful speech is found. Word animation and blur-in are planned for processing.")
+            Text(prepared?.hasAudio == false
+                 ? "This source has no audio track, so captions started off."
+                 : "Captions turn off if transcription finds no meaningful speech.")
                 .foregroundStyle(.secondary)
         }
     }
@@ -245,6 +324,10 @@ struct WizardView: View {
             TextField("Project name", text: $draft.title)
                 .textFieldStyle(.roundedBorder)
                 .font(.title3)
+            if !validTitle {
+                Text("Enter a project name of up to 200 characters.")
+                    .foregroundStyle(.red)
+            }
             Divider()
             LabeledContent("Source", value: prepared?.asset.displayName ?? "No source selected")
             if let asset = prepared?.asset {
@@ -252,11 +335,35 @@ struct WizardView: View {
             }
             LabeledContent("Format", value: draft.preset.rawValue)
             LabeledContent("Framing", value: draft.framingMode.label)
+            LabeledContent("Pacing", value: draft.pacingMode.label)
+            LabeledContent("Smart editing", value: smartEditSummary)
             LabeledContent("Length", value: draft.lengths.isEmpty
-                           ? "Unrestricted"
+                           ? "Any Length"
                            : ClipLength.allCases.filter { draft.lengths.contains($0) }.map(\.label).joined(separator: ", "))
-            LabeledContent("Captions", value: draft.captionsEnabled ? draft.captionStyle.label : "Off")
+            LabeledContent("Number", value: draft.countMode == .aiDecides
+                           ? "AI decides" : "Up to \(draft.requestedClipCount)")
+            LabeledContent("Sound", value: draft.soundMode == .normalize ? "Normalize" : "Original")
+            LabeledContent("Captions", value: draft.captionsEnabled
+                           ? "\(draft.captionStyle.label)\(draft.captionWordByWord ? " · Word-by-word" : "")\(draft.captionBlurIn ? " · Blur-in" : "")"
+                           : "Off")
         }
+    }
+
+    private var validTitle: Bool {
+        let title = draft.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !title.isEmpty && title.count <= 200
+    }
+
+    private var smartEditSummary: String {
+        let options = draft.smartEdit
+        let enabled = [
+            (options.useVisionForTrickyShots, "AI Vision"),
+            (options.cutDeadAir, "Dead air"),
+            (options.trimLongPauses, "Long pauses"),
+            (options.cleanFillers, "Filler words"),
+            (options.keepDemos, "Keep demos"),
+        ].filter(\.0).map(\.1)
+        return enabled.isEmpty ? "Off" : enabled.joined(separator: ", ")
     }
 
     private var processContent: some View {
@@ -320,6 +427,7 @@ struct WizardView: View {
                 guard preparationID == id else { return }
                 prepared = result
                 if descriptor.kind == .local { draft.sourceName = result.asset.displayName }
+                draft.captionsEnabled = result.hasAudio
                 preparing = false
             } catch {
                 guard preparationID == id else { return }
