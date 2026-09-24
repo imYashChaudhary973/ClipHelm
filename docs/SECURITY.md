@@ -21,4 +21,4 @@ Only transcript excerpts, necessary metadata, and selected keyframes may leave t
 
 ## Verification status
 
-Core decoding rejects malformed timing, geometry, scores, unsupported spec versions, and invalid proposals. Keychain, networking, media, and transcription are planned for later phases.
+Core decoding rejects malformed timing, geometry, scores, unsupported spec versions, and invalid proposals. Phase 2 tests validate Keychain input, the fixed HTTPS gateway, sanitized errors, and model capability filtering. Media and transcription are planned for later phases.

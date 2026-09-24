@@ -155,7 +155,7 @@ struct AppShell: View {
                 LabeledContent("Appearance", value: "Follows macOS")
                 Divider()
                 LabeledContent("Project storage", value: "Application Support / ClipHelm / Projects")
-                // OPENROUTER_SETTINGS
+                OpenRouterSettingsView()
                 Divider()
                 Text("Keyboard Shortcuts").font(.headline)
                 LabeledContent("New project", value: "⌘N")
