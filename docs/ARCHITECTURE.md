@@ -4,7 +4,7 @@ ClipHelm is a local-first native macOS editor. Its own pipeline owns media, time
 
 ## Module boundaries
 
-Dependencies point downward. `ClipHelmCore`, `ClipHelmSecurity`, `ClipHelmOpenRouter`, `ClipHelmMedia`, `ClipHelmSources`, `ClipHelmTranscription`, and the `ClipHelmApp` shell are implemented targets. The remaining modules are design boundaries for later phases.
+Dependencies point downward. `ClipHelmCore`, `ClipHelmSecurity`, `ClipHelmOpenRouter`, `ClipHelmMedia`, `ClipHelmSources`, `ClipHelmTranscription`, `ClipHelmAnalysis`, and the `ClipHelmApp` shell are implemented targets. The remaining modules are design boundaries for later phases.
 
 | Module | Owns | May depend on |
 | --- | --- | --- |
@@ -35,6 +35,8 @@ Phase 3 `SourceIngestor` owns local inspection, direct HTTPS downloads, and the 
 Phase 4 `MediaProbe` is shared by ingestion and editing. `PlaybackEngine` plays a source or proxy using `MediaTimeMap` to translate seeks and displayed time. `ThumbnailEngine` and `FrameSampler` decode one requested frame at a time. `AudioExtractor` writes AAC audio; `ProxyEngine` creates a 720p editing copy for sources above 1080p or 1 GB. Export and frame generation try AVFoundation first; an optional fixed-path FFmpeg adapter handles local decoder failures with array arguments, no shell, and a file-only protocol whitelist. Jobs report progress and cancellation, and failed partial outputs are removed. The original is never rewritten.
 
 Phase 5 `TranscriptEngine` splits source audio into bounded chunks, checks for audible activity, calls one `TranscriptionBackend` per active chunk, validates relative word times, maps them to the source timeline and groups words into speaker-aware segments. `AppleSpeechBackend` requires on-device recognition; `OpenRouterTranscriptionBackend` sends only short audio chunks through `OpenRouterGateway` after an explicit user action. Both produce the same typed transcript. The workspace stores completed transcripts, supports search and seek, and leaves captions off when no words were recognized.
+
+Phase 6 `AnalysisEngine` runs only after the user starts local analysis in the workspace. It samples at most about 3,600 frames with AVFoundation, uses Vision for face/person and text-box detections, measures frame changes, and streams PCM audio in 250 ms windows. Audio windows widen for unusually long recordings to cap stored evidence near 100,000 windows. It combines these into possible scene, motion, pause, subject, screen, and content-type evidence. Each signal carries source-media time, strength, and confidence. Talking head, conversation, screen share, presentation, demo, and gameplay labels are conservative heuristics; uncertain windows remain `unknown`. These confidence values are estimates, not calibrated probabilities, and fall as sampling becomes coarser. Scene boundaries may be seconds off in long recordings; quiet audio is only a possible pause. No vision AI or OpenRouter call occurs. The original source is read only. Completed analysis is stored in a private, disposable, versioned cache; see `PROJECT_FORMAT.md`.
 
 ## Data flow
 

@@ -194,4 +194,12 @@ final class ProjectStore: ObservableObject {
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: manifest.path)
         projects[index] = updated
     }
+
+    func analysisCacheDirectory(for projectID: ProjectID) throws -> URL {
+        guard let rootURL, projects.contains(where: { $0.id == projectID }) else {
+            throw ModelError.invalid("Analysis project")
+        }
+        return rootURL.appending(path: "\(projectID.rawValue.uuidString).cliphelm/Cache",
+                                 directoryHint: .isDirectory)
+    }
 }
