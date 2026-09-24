@@ -2,6 +2,8 @@
 
 A project is a versioned manifest plus regeneratable caches. Phase 5 saves draft choices, optional validated `MediaAsset` metadata, and the completed word-timed `Transcript` in `project.json`. An empty transcript also sets `captionStyle` to `null`. Source URLs, local paths, downloaded bytes, proxies, thumbnails, and editing data are not persisted. A proxy and its `MediaTimeMap` live in memory and temporary storage for the active session.
 
+Phase 6 writes `Cache/analysis-v1.json` only after local analysis finishes. The cache envelope has an independent schema version, a source fingerprint, and validated source-timeline signals, scenes, detections, tracks, and tentative content labels. The fingerprint uses file size, modification time, and hashes of bounded bytes from both ends of the file; it is rechecked before saving. It contains no source path, source URL, original frames, audio, transcript, or API credential. Loading rejects an old version, a changed source, a mismatched asset, an oversized file, or invalid bounds, then regenerates on the next analysis request. The cache directory and file use private permissions and atomic writes. The fingerprint is a practical cache key, not a full-file integrity hash; a middle-only edit that preserves file size, modification time, and both sampled ends can evade it.
+
 ## Proposed layout
 
 ```text

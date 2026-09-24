@@ -271,6 +271,7 @@ struct AppShell: View {
                     .foregroundStyle(.secondary)
             }
             WorkspacePlaybackView(project: project, source: sessionSources[project.id],
+                analysisCacheDirectory: try? store.analysisCacheDirectory(for: project.id),
                 saveTranscript: { try store.saveTranscript($0, for: project.id) },
                 reattachSource: { try await reattachSource($0, to: project) })
             Divider()

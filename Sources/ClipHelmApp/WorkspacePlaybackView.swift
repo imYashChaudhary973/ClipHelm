@@ -6,6 +6,7 @@ import ClipHelmSources
 import ClipHelmSecurity
 import ClipHelmOpenRouter
 import ClipHelmTranscription
+import ClipHelmAnalysis
 import UniformTypeIdentifiers
 
 @MainActor
@@ -16,6 +17,9 @@ private final class WorkspacePlaybackController: ObservableObject {
     @Published var transcribing = false
     @Published var transcriptProgress: TranscriptProgress?
     @Published var transcript: Transcript?
+    @Published var analyzing = false
+    @Published var analysisProgress: AnalysisProgress?
+    @Published var analysis: AnalysisResult?
     @Published var models: [OpenRouterModel] = []
     @Published var selectedModelID = ""
     @Published var loadingModels = false
@@ -25,12 +29,15 @@ private final class WorkspacePlaybackController: ObservableObject {
     private lazy var registry = OpenRouterModelRegistry(gateway: gateway)
     private var proxyJob: Task<Void, Never>?
     private var transcriptJob: Task<Void, Never>?
+    private var analysisJob: Task<Void, Never>?
     private var catalogJob: Task<Void, Never>?
     private var transcriptionRunID = UUID()
+    private var analysisRunID = UUID()
 
     func start(project: ProjectRecord, source: PreparedSource?) {
         stop()
         transcript = project.transcript
+        analysis = nil
         guard let source else { return }
         do { try engine.load(sourceURL: source.fileURL) }
         catch { message = "This source is no longer available. Choose it again in a new draft."; return }
@@ -134,6 +141,34 @@ private final class WorkspacePlaybackController: ObservableObject {
         }
     }
 
+    func analyze(source: PreparedSource, cacheDirectory: URL) {
+        analysisJob?.cancel()
+        let runID = UUID()
+        analysisRunID = runID
+        analyzing = true
+        analysisProgress = nil
+        message = nil
+        analysisJob = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let result = try await AnalysisEngine().analyze(sourceURL: source.fileURL,
+                    asset: source.asset, cacheDirectory: cacheDirectory) { [weak self] update in
+                    Task { @MainActor [weak self] in
+                        if self?.analysisRunID == runID { self?.analysisProgress = update }
+                    }
+                }
+                try Task.checkCancellation()
+                if analysisRunID == runID { analysis = result }
+            } catch is CancellationError {
+            } catch {
+                if analysisRunID == runID {
+                    message = "Local analysis could not finish. Check the source and try again."
+                }
+            }
+            if analysisRunID == runID { analyzing = false }
+        }
+    }
+
     func seek(to time: MediaTime) {
         Task {
             do {
@@ -152,19 +187,31 @@ private final class WorkspacePlaybackController: ObservableObject {
         transcribing = false
     }
 
+    func cancelAnalysis() {
+        analysisRunID = UUID()
+        analysisJob?.cancel()
+        analyzing = false
+    }
+
     func stop() {
         proxyJob?.cancel()
         transcriptJob?.cancel()
+        analysisJob?.cancel()
         transcriptionRunID = UUID()
+        analysisRunID = UUID()
         catalogJob?.cancel()
         proxyJob = nil
         transcriptJob = nil
+        analysisJob = nil
         catalogJob = nil
         preparingProxy = false
         transcribing = false
+        analyzing = false
         loadingModels = false
         proxyFraction = nil
         transcriptProgress = nil
+        analysisProgress = nil
+        analysis = nil
         message = nil
         engine.unload()
     }
@@ -173,6 +220,7 @@ private final class WorkspacePlaybackController: ObservableObject {
 struct WorkspacePlaybackView: View {
     let project: ProjectRecord
     let source: PreparedSource?
+    let analysisCacheDirectory: URL?
     let saveTranscript: @MainActor (Transcript) throws -> Void
     let reattachSource: @MainActor (URL) async throws -> Void
     @StateObject private var controller = WorkspacePlaybackController()
@@ -221,6 +269,48 @@ struct WorkspacePlaybackView: View {
                     Button("Cancel") { controller.cancelProxy() }
                 }
             }
+
+            Divider()
+            HStack {
+                Text("Local analysis").font(.title3.weight(.semibold))
+                Spacer()
+                if let source, let analysisCacheDirectory, !controller.analyzing {
+                    Button(controller.analysis == nil ? "Analyze on This Mac" : "Analyze Again") {
+                        controller.analyze(source: source, cacheDirectory: analysisCacheDirectory)
+                    }
+                }
+            }
+            if controller.analyzing {
+                HStack {
+                    ProgressView(value: controller.analysisProgress?.fraction ?? 0)
+                        .frame(width: 180)
+                    Text(analysisStage).foregroundStyle(.secondary)
+                    Button("Cancel") { controller.cancelAnalysis() }
+                }
+            } else if let analysis = controller.analysis {
+                Text("\(analysis.scenes.count) scenes · \(analysis.subjectTracks.count) subject tracks · \(analysis.signals.filter { $0.kind == .pause }.count) possible pauses")
+                    .foregroundStyle(.secondary)
+                ForEach(Array(analysis.classifications.prefix(6).enumerated()), id: \.offset) { _, item in
+                    HStack {
+                        Text(Self.timeLabel(item.range.start)).monospacedDigit()
+                            .foregroundStyle(.secondary).frame(width: 52, alignment: .leading)
+                        Text(item.kind.label)
+                        Text("· \(item.confidence < 0.45 ? "low" : "moderate") confidence")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                if analysis.classifications.count > 6 {
+                    Text("\(analysis.classifications.count - 6) more analyzed intervals")
+                        .foregroundStyle(.secondary)
+                }
+                Text("Labels are local estimates. Review uncertain shots before editing.")
+                    .font(.callout).foregroundStyle(.secondary)
+            } else {
+                Text("Detect scenes, motion, subjects, audio activity, and possible content types locally.")
+                    .foregroundStyle(.secondary)
+            }
+
+            Divider()
 
             HStack {
                 Text("Transcript").font(.title3.weight(.semibold))
@@ -322,5 +412,29 @@ struct WorkspacePlaybackView: View {
     private static func timeLabel(_ time: MediaTime) -> String {
         let seconds = time.microseconds / 1_000_000
         return "\(seconds / 60):\(String(format: "%02d", seconds % 60))"
+    }
+
+    private var analysisStage: String {
+        switch controller.analysisProgress?.stage {
+        case .video: "Checking frames…"
+        case .audio: "Checking audio…"
+        case .classifying: "Classifying intervals…"
+        case .caching: "Saving analysis cache…"
+        case nil: "Preparing analysis…"
+        }
+    }
+}
+
+private extension ContentKind {
+    var label: String {
+        switch self {
+        case .talkingHead: "Possible talking head"
+        case .conversation: "Possible conversation"
+        case .screenShare: "Possible screen share"
+        case .presentation: "Possible presentation"
+        case .demo: "Possible demo"
+        case .gameplay: "Possible gameplay"
+        case .unknown: "Unknown content"
+        }
     }
 }
