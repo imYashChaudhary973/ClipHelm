@@ -1,6 +1,6 @@
 # ClipHelm
 
-Native macOS clip editor in development. Phase 5 adds word-timed transcription and a searchable transcript workspace. Clip processing and final export are still planned.
+Native macOS clip editor in development. Phase 7 adds local candidate discovery with bounded OpenRouter semantic scoring and workspace review. Clip editing, rendering, and final export are still planned.
 
 ## Run
 
@@ -19,9 +19,11 @@ The Source step accepts MP4 and MOV, plus MKV when AVFoundation can decode it. C
 
 The media engine uses AVFoundation first. When this Mac's AVFoundation decoder cannot create frames or exports, an installed FFmpeg at `/opt/homebrew/bin/ffmpeg` or `/usr/local/bin/ffmpeg` provides a local fallback. No network protocol is enabled in that fallback. A large source creates a 720p editing proxy in temporary storage; its source timeline remains the source of truth. Original media is read only.
 
-Settings → OpenRouter lets you add, test, replace, or remove one API key. The key is stored only in macOS Keychain. Test checks the key without model inference or API spend. Model discovery reads OpenRouter's live catalog; no model is hardcoded or called in this phase.
+Settings → OpenRouter lets you add, test, replace, or remove one API key. The key is stored only in the macOS login Keychain. Test checks the key without model inference or API spend. Model discovery reads OpenRouter's live catalog; no model is hardcoded.
 
 In a workspace, choose **Transcribe on This Mac** to use Apple's on-device speech recognition. macOS may ask for Speech Recognition permission. The transcript has word times and optional confidence/speaker metadata; search it or click a row to seek. Silent or speech-free results turn captions off. OpenRouter transcription is optional: choose it, load the catalog, select a transcription model, then explicitly start the paid request. ClipHelm sends extracted short audio chunks through its OpenRouter gateway, never the original video. Some catalog models may not provide word timing and will be rejected.
+
+To discover moments, run **Analyze on This Mac** in the workspace. With speech, transcribe, load structured text models, select one, then choose **Find Best Moments**. The explicit discovery action uses OpenRouter credits and sends only bounded excerpts from local candidate windows. It ranks, deduplicates, checks selected lengths, and shows a reason when no strong moments remain. Click a result to seek. Without a transcript, it can suggest active visual intervals locally for manual review; no AI call is made. Discovery results are session-only in this phase.
 
 ## Tests
 
@@ -29,4 +31,4 @@ In a workspace, choose **Transcribe on This Mac** to use Apple's on-device speec
 swift test --disable-sandbox
 ```
 
-The tests cover source validation, 1080p/4K and 25/30/60 fps metadata, proxies, frame sampling, audio extraction, time mapping, transcript chunk mapping and silence detection, project restoration, mocked OpenRouter behavior, and Keychain input validation. The live Keychain CRUD test skips only when the test process cannot access macOS Keychain. Module contracts are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+The tests cover source validation, 1080p/4K and 25/30/60 fps metadata, proxies, frame sampling, audio extraction, time mapping, transcript chunk mapping and silence detection, local analysis, moment discovery fixtures, project restoration, mocked OpenRouter behavior, and Keychain input validation. The live Keychain CRUD test needs access to macOS Keychain. Module contracts are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).

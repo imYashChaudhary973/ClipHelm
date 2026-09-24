@@ -33,28 +33,46 @@ public struct OpenRouterSecretVault: OpenRouterSecretReading, Sendable {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
-            kSecUseDataProtectionKeychain as String: true,
+            kSecAttrSynchronizable as String: false,
         ]
     }
 
-    public func hasKey() throws -> Bool {
+    private var previousDataProtectionQuery: [String: Any] {
         var request = query
+        request.removeValue(forKey: kSecAttrSynchronizable as String)
+        request[kSecUseDataProtectionKeychain as String] = true
+        return request
+    }
+
+    private func lookup(_ base: [String: Any], returnData: Bool) -> (OSStatus, CFTypeRef?) {
+        var request = base
         request[kSecMatchLimit as String] = kSecMatchLimitOne
-        request[kSecReturnAttributes as String] = true
-        let status = SecItemCopyMatching(request as CFDictionary, nil)
+        request[returnData ? kSecReturnData as String : kSecReturnAttributes as String] = true
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(request as CFDictionary, &result)
+        return (status, result)
+    }
+
+    public func hasKey() throws -> Bool {
+        let (status, _) = lookup(query, returnData: false)
         switch status {
         case errSecSuccess: return true
-        case errSecItemNotFound: return false
+        case errSecItemNotFound:
+            let (previousStatus, _) = lookup(previousDataProtectionQuery, returnData: false)
+            switch previousStatus {
+            case errSecSuccess: return true
+            case errSecItemNotFound, errSecMissingEntitlement: return false
+            default: throw OpenRouterSecretError.unavailable
+            }
         default: throw OpenRouterSecretError.unavailable
         }
     }
 
     public func readKey() throws -> String {
-        var request = query
-        request[kSecMatchLimit as String] = kSecMatchLimitOne
-        request[kSecReturnData as String] = true
-        var result: CFTypeRef?
-        let status = SecItemCopyMatching(request as CFDictionary, &result)
+        var (status, result) = lookup(query, returnData: true)
+        if status == errSecItemNotFound {
+            (status, result) = lookup(previousDataProtectionQuery, returnData: true)
+        }
         if status == errSecItemNotFound { throw OpenRouterSecretError.missingKey }
         guard status == errSecSuccess, let data = result as? Data,
               let key = String(data: data, encoding: .utf8) else {
@@ -71,7 +89,6 @@ public struct OpenRouterSecretVault: OpenRouterSecretReading, Sendable {
         let data = Data(key.utf8)
         var attributes = query
         attributes[kSecValueData as String] = data
-        attributes[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         attributes[kSecAttrLabel as String] = "ClipHelm OpenRouter API Key"
 
         let status = SecItemAdd(attributes as CFDictionary, nil)
@@ -86,8 +103,10 @@ public struct OpenRouterSecretVault: OpenRouterSecretReading, Sendable {
     }
 
     public func remove() throws {
-        let status = SecItemDelete(query as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else {
+        let legacyStatus = SecItemDelete(query as CFDictionary)
+        let previousStatus = SecItemDelete(previousDataProtectionQuery as CFDictionary)
+        guard [errSecSuccess, errSecItemNotFound].contains(legacyStatus),
+              [errSecSuccess, errSecItemNotFound, errSecMissingEntitlement].contains(previousStatus) else {
             throw OpenRouterSecretError.unavailable
         }
     }

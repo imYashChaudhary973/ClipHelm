@@ -12,6 +12,7 @@ let package = Package(
         .library(name: "ClipHelmMedia", targets: ["ClipHelmMedia"]),
         .library(name: "ClipHelmTranscription", targets: ["ClipHelmTranscription"]),
         .library(name: "ClipHelmAnalysis", targets: ["ClipHelmAnalysis"]),
+        .library(name: "ClipHelmMoments", targets: ["ClipHelmMoments"]),
         .executable(name: "ClipHelmApp", targets: ["ClipHelmApp"]),
     ],
     targets: [
@@ -21,8 +22,9 @@ let package = Package(
         .target(name: "ClipHelmMedia", dependencies: ["ClipHelmCore"]),
         .target(name: "ClipHelmTranscription", dependencies: ["ClipHelmCore", "ClipHelmMedia", "ClipHelmOpenRouter"]),
         .target(name: "ClipHelmAnalysis", dependencies: ["ClipHelmCore", "ClipHelmMedia"]),
+        .target(name: "ClipHelmMoments", dependencies: ["ClipHelmCore", "ClipHelmAnalysis", "ClipHelmOpenRouter"]),
         .target(name: "ClipHelmSources", dependencies: ["ClipHelmCore", "ClipHelmMedia"]),
-        .executableTarget(name: "ClipHelmApp", dependencies: ["ClipHelmCore", "ClipHelmSecurity", "ClipHelmOpenRouter", "ClipHelmSources", "ClipHelmMedia", "ClipHelmTranscription", "ClipHelmAnalysis"]),
+        .executableTarget(name: "ClipHelmApp", dependencies: ["ClipHelmCore", "ClipHelmSecurity", "ClipHelmOpenRouter", "ClipHelmSources", "ClipHelmMedia", "ClipHelmTranscription", "ClipHelmAnalysis", "ClipHelmMoments"]),
         .testTarget(name: "ClipHelmCoreTests", dependencies: ["ClipHelmCore"]),
         .testTarget(name: "ClipHelmSecurityTests", dependencies: ["ClipHelmSecurity"]),
         .testTarget(name: "ClipHelmOpenRouterTests", dependencies: ["ClipHelmOpenRouter", "ClipHelmSecurity"]),
@@ -34,6 +36,7 @@ let package = Package(
                     resources: [.process("Fixtures")]),
         .testTarget(name: "ClipHelmAnalysisTests", dependencies: ["ClipHelmAnalysis", "ClipHelmCore", "ClipHelmMedia"],
                     resources: [.process("Fixtures")]),
+        .testTarget(name: "ClipHelmMomentsTests", dependencies: ["ClipHelmMoments", "ClipHelmCore", "ClipHelmAnalysis", "ClipHelmOpenRouter"]),
         .testTarget(name: "ClipHelmAppTests", dependencies: ["ClipHelmApp", "ClipHelmCore"]),
     ]
 )

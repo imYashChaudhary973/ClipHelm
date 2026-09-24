@@ -25,10 +25,15 @@ final class CoreModelTests: XCTestCase {
                                bounds: NormalizedRect(x: 0.2, y: 0.1, width: 0.4, height: 0.6)),
         ])
         let signal = try MomentSignal(kind: .hook, range: range(1_000_000, 3_000_000), strength: 0.9)
+        let score = try MomentScore(hook: 0.8, standaloneCompleteness: 0.9, insight: 0.8,
+                                    story: 0.5, questionAnswerCompletion: 0.7, educationalValue: 0.6,
+                                    interest: 0.8, contextDependency: 0.1, repetition: 0.1,
+                                    localEvidence: 0.7)
         let candidate = try MomentCandidate(assetID: assetID, range: range(0, 10_000_000),
-                                            signals: [signal], score: 0.8)
+                                            signals: [signal], score: score)
         let proposal = try ClipProposal(assetID: assetID, range: range(0, 10_000_000),
-                                        title: "A strong opening", rationale: "Complete thought", confidence: 0.8)
+                                        title: "A strong opening", rationale: "Complete thought", confidence: 0.8,
+                                        score: score)
         let intent = AIEditIntent(proposalID: proposal.id, suggestedRange: try range(1_000_000, 9_000_000),
                                   preserveDemo: true, framingPreference: .smartAuto)
         let smartEdit = SmartEditOptions(useVisionForTrickyShots: true, cutDeadAir: true,
@@ -55,6 +60,7 @@ final class CoreModelTests: XCTestCase {
         try roundTrip(scene)
         try roundTrip(track)
         try roundTrip(candidate)
+        try roundTrip(score)
         try roundTrip(proposal)
         try roundTrip(intent)
         try roundTrip(configuration)
@@ -78,6 +84,13 @@ final class CoreModelTests: XCTestCase {
         json["confidence"] = 4.0
         XCTAssertThrowsError(try JSONDecoder().decode(ClipProposal.self,
                                                        from: JSONSerialization.data(withJSONObject: json)))
+        var scoreJSON = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(
+            try MomentScore(hook: 0.8, standaloneCompleteness: 0.8, insight: 0.8,
+                            story: 0.8, questionAnswerCompletion: 0.8, educationalValue: 0.8,
+                            interest: 0.8, contextDependency: 0.1, repetition: 0.1))) as? [String: Any])
+        scoreJSON["hook"] = -1
+        XCTAssertThrowsError(try JSONDecoder().decode(MomentScore.self,
+                                                       from: JSONSerialization.data(withJSONObject: scoreJSON)))
 
         let spec = try ClipHelmEditSpec(clipID: ClipID(), sourceAssetID: assetID,
                                        segments: [EditSegment(sourceRange: try range(0, 10_000_000))],

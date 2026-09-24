@@ -7,6 +7,7 @@ import ClipHelmSecurity
 import ClipHelmOpenRouter
 import ClipHelmTranscription
 import ClipHelmAnalysis
+import ClipHelmMoments
 import UniformTypeIdentifiers
 
 @MainActor
@@ -20,6 +21,12 @@ private final class WorkspacePlaybackController: ObservableObject {
     @Published var analyzing = false
     @Published var analysisProgress: AnalysisProgress?
     @Published var analysis: AnalysisResult?
+    @Published var momentModels: [OpenRouterModel] = []
+    @Published var selectedMomentModelID = ""
+    @Published var loadingMomentModels = false
+    @Published var discoveringMoments = false
+    @Published var momentProgress: MomentDiscoveryProgress?
+    @Published var moments: MomentDiscoveryResult?
     @Published var models: [OpenRouterModel] = []
     @Published var selectedModelID = ""
     @Published var loadingModels = false
@@ -30,14 +37,17 @@ private final class WorkspacePlaybackController: ObservableObject {
     private var proxyJob: Task<Void, Never>?
     private var transcriptJob: Task<Void, Never>?
     private var analysisJob: Task<Void, Never>?
+    private var momentJob: Task<Void, Never>?
     private var catalogJob: Task<Void, Never>?
     private var transcriptionRunID = UUID()
     private var analysisRunID = UUID()
+    private var momentRunID = UUID()
 
     func start(project: ProjectRecord, source: PreparedSource?) {
         stop()
         transcript = project.transcript
         analysis = nil
+        moments = nil
         guard let source else { return }
         do { try engine.load(sourceURL: source.fileURL) }
         catch { message = "This source is no longer available. Choose it again in a new draft."; return }
@@ -95,6 +105,7 @@ private final class WorkspacePlaybackController: ObservableObject {
 
     func transcribe(source: PreparedSource, useOpenRouter: Bool,
                     save: @escaping @MainActor (Transcript) throws -> Void) {
+        cancelMoments()
         transcriptJob?.cancel()
         let runID = UUID()
         transcriptionRunID = runID
@@ -124,6 +135,7 @@ private final class WorkspacePlaybackController: ObservableObject {
                 guard transcriptionRunID == runID else { return }
                 try save(result)
                 transcript = result
+                moments = nil
                 if !result.hasMeaningfulSpeech {
                     message = "No speech detected. Captions are off for this project."
                 }
@@ -142,6 +154,7 @@ private final class WorkspacePlaybackController: ObservableObject {
     }
 
     func analyze(source: PreparedSource, cacheDirectory: URL) {
+        cancelMoments()
         analysisJob?.cancel()
         let runID = UUID()
         analysisRunID = runID
@@ -159,6 +172,7 @@ private final class WorkspacePlaybackController: ObservableObject {
                 }
                 try Task.checkCancellation()
                 if analysisRunID == runID { analysis = result }
+                if analysisRunID == runID { moments = nil }
             } catch is CancellationError {
             } catch {
                 if analysisRunID == runID {
@@ -166,6 +180,66 @@ private final class WorkspacePlaybackController: ObservableObject {
                 }
             }
             if analysisRunID == runID { analyzing = false }
+        }
+    }
+
+    func loadMomentModels() {
+        catalogJob?.cancel()
+        loadingMomentModels = true
+        message = nil
+        catalogJob = Task { [weak self] in
+            guard let self else { return }
+            do {
+                _ = try await registry.refresh()
+                try Task.checkCancellation()
+                momentModels = await registry.models(supporting: [.text, .structuredOutput])
+                selectedMomentModelID = (await registry.selectedModel(for: .clipDiscovery))?.id
+                    ?? momentModels.first?.id ?? ""
+                if momentModels.isEmpty { message = "No structured text models are available for this key." }
+            } catch is CancellationError {
+            } catch {
+                message = "Could not load OpenRouter models. Check the key in Settings."
+            }
+            loadingMomentModels = false
+        }
+    }
+
+    func discoverMoments(source: PreparedSource, lengths: [ClipLength]) {
+        guard let analysis else { return }
+        momentJob?.cancel()
+        let runID = UUID()
+        momentRunID = runID
+        discoveringMoments = true
+        momentProgress = nil
+        moments = nil
+        message = nil
+        momentJob = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let modelID: String?
+                if transcript?.hasMeaningfulSpeech == true {
+                    guard let model = momentModels.first(where: { $0.id == selectedMomentModelID }) else {
+                        throw MomentEngineError.modelRequired
+                    }
+                    try await registry.selectModel(id: model.id, for: .clipDiscovery)
+                    modelID = model.id
+                } else { modelID = nil }
+                let result = try await MomentEngine().discover(asset: source.asset,
+                    transcript: transcript, analysis: analysis, selectedLengths: lengths,
+                    requestedCount: nil, modelID: modelID, gateway: gateway) { [weak self] update in
+                    Task { @MainActor [weak self] in
+                        if self?.momentRunID == runID { self?.momentProgress = update }
+                    }
+                }
+                try Task.checkCancellation()
+                if momentRunID == runID { moments = result }
+            } catch is CancellationError {
+            } catch let error as LocalizedError {
+                if momentRunID == runID { message = error.errorDescription ?? "Moment discovery failed." }
+            } catch {
+                if momentRunID == runID { message = "Moment discovery failed. Try again." }
+            }
+            if momentRunID == runID { discoveringMoments = false }
         }
     }
 
@@ -193,25 +267,38 @@ private final class WorkspacePlaybackController: ObservableObject {
         analyzing = false
     }
 
+    func cancelMoments() {
+        momentRunID = UUID()
+        momentJob?.cancel()
+        discoveringMoments = false
+    }
+
     func stop() {
         proxyJob?.cancel()
         transcriptJob?.cancel()
         analysisJob?.cancel()
+        momentJob?.cancel()
         transcriptionRunID = UUID()
         analysisRunID = UUID()
+        momentRunID = UUID()
         catalogJob?.cancel()
         proxyJob = nil
         transcriptJob = nil
         analysisJob = nil
+        momentJob = nil
         catalogJob = nil
         preparingProxy = false
         transcribing = false
         analyzing = false
+        discoveringMoments = false
+        loadingMomentModels = false
         loadingModels = false
         proxyFraction = nil
         transcriptProgress = nil
         analysisProgress = nil
+        momentProgress = nil
         analysis = nil
+        moments = nil
         message = nil
         engine.unload()
     }
@@ -392,6 +479,73 @@ struct WorkspacePlaybackView: View {
             } else {
                 Text("Transcribe to search speech and jump to a moment.")
                     .foregroundStyle(.secondary)
+            }
+
+            Divider()
+            HStack {
+                Text("Best moments").font(.title3.weight(.semibold))
+                Spacer()
+                if controller.transcript?.hasMeaningfulSpeech == true {
+                    Button(controller.loadingMomentModels ? "Loading…" : "Load Models") {
+                        controller.loadMomentModels()
+                    }
+                    .disabled(controller.loadingMomentModels || controller.discoveringMoments)
+                }
+            }
+            if controller.transcript?.hasMeaningfulSpeech == true {
+                if !controller.momentModels.isEmpty {
+                    Picker("Discovery model", selection: $controller.selectedMomentModelID) {
+                        ForEach(controller.momentModels) { model in
+                            Text(model.name).tag(model.id)
+                        }
+                    }
+                    Text("Sends only selected transcript excerpts and metadata to OpenRouter. Uses API credits.")
+                        .font(.callout).foregroundStyle(.secondary)
+                } else {
+                    Text("Load a structured text model to evaluate spoken moments.")
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                Text("Without a transcript, discovery uses local visual activity and needs manual review.")
+                    .foregroundStyle(.secondary)
+            }
+            if controller.discoveringMoments {
+                HStack {
+                    ProgressView(value: Double(controller.momentProgress?.completed ?? 0),
+                                 total: Double(max(1, controller.momentProgress?.total ?? 1)))
+                        .frame(width: 180)
+                    Text("Evaluating moments…").foregroundStyle(.secondary)
+                    Button("Cancel") { controller.cancelMoments() }
+                }
+            } else if let source, controller.analysis != nil {
+                Button("Find Best Moments") {
+                    controller.discoverMoments(source: source, lengths: project.selectedLengths)
+                }
+                .disabled(controller.transcript?.hasMeaningfulSpeech == true &&
+                          controller.selectedMomentModelID.isEmpty)
+            } else {
+                Text("Run local analysis to find candidate windows.").foregroundStyle(.secondary)
+            }
+            if let result = controller.moments {
+                if let explanation = result.explanation {
+                    Text(explanation).font(.callout).foregroundStyle(.secondary)
+                }
+                ForEach(result.moments, id: \.candidate.id) { moment in
+                    Button { controller.seek(to: moment.proposal.range.start) } label: {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(Self.timeLabel(moment.proposal.range.start)).monospacedDigit()
+                                .frame(width: 52, alignment: .leading)
+                            VStack(alignment: .leading) {
+                                Text(moment.proposal.title).fontWeight(.medium)
+                                Text(moment.proposal.rationale).font(.callout).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Text("\(Int(moment.quality * 100))")
+                                .monospacedDigit().foregroundStyle(.secondary)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
             }
         }
         .frame(maxWidth: 1000, alignment: .leading)

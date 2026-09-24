@@ -1,18 +1,11 @@
-# Moment engine design
+# Moment discovery engine
 
-The moment engine ranks locally generated candidates; it does not send an entire transcript to an LLM for timestamp selection.
+Phase 7 discovers candidate clips. It does not edit or render video.
 
-## Planned pipeline
+1. Local segmentation takes transcript segment/sentence edges, gaps, speaker and topic transitions, scene cuts, pauses, and strong audio/visual signal edges. All times remain source-media microseconds.
+2. Local candidate generation chooses natural start/end boundaries near each selected `ClipLength` midpoint. Empty length selection considers every supported duration category and does not filter final duration. Strong candidates are retained across five-minute chapters before the semantic request cap (default 40), preserving coverage on long sources.
+3. A structured-output OpenRouter model evaluates each spoken candidate independently. The request contains only its IDs, range, local content labels, and at most 120 transcript words sampled from the beginning, middle, and end (also capped at 2,400 characters). The full source transcript or original video is never sent. This sampling can miss context in long clips.
+4. The model returns only a `ClipProposal` with a `MomentScore`: hook, standalone completeness, insight, story, question/answer completion, educational value, interest, context dependency, and repetition. Each dimension is validated in 0–1. Local evidence is computed and inserted by ClipHelm. A proposal is rejected if it changes the candidate ID, asset, time range, schema, or source bounds.
+5. ClipHelm ranks by weighted quality, removes time-overlapping or highly similar transcript ideas, checks natural boundaries and selected duration categories, and returns only moments over the threshold. A requested count is a maximum; the result explains when fewer distinct high-quality moments exist.
 
-1. Normalize word timings and sentence boundaries. Analyze scene cuts, visual activity, speaker emphasis, audio energy, pauses, and repetition locally.
-2. Partition long media into topic-sized windows. Build overlapping candidate ranges around complete thoughts, then merge or split at sentence and scene boundaries. Keep source time provenance.
-3. Attach `MomentSignal` evidence to each `MomentCandidate`. Positive signals include hooks, standalone meaning, emphasis, and story completion. Context dependency and repetition lower rank.
-4. Send only relevant transcript excerpts, timings, small metadata, and selected keyframes to OpenRouter when semantic reasoning improves ranking. Vision is reserved for uncertain shots or demo context.
-5. Decode `ClipProposal` as untrusted data. Validate asset ID, bounds, confidence, and relation to local candidates. Reject or repair only by deterministic local rules; never accept an invented timestamp as authority.
-6. Rank for quality and variety. Prefer complete, understandable clips over an exact requested count. If fewer candidates clear the quality threshold, return fewer and explain the limiting evidence.
-
-`selectedLengths` is a multi-select filter. An empty selection means unrestricted duration. `requestedClipCount == nil` means AI decides. The actual threshold, model choice, diversity weights, and cost budget are future phase decisions and must be measured on representative media before being fixed.
-
-## Checks for implementation phases
-
-Tests should cover timeline mapping, candidate overlap, long-video hierarchy, score stability, context dependence, demo preservation, and the fewer-than-requested result. Normal tests use gateway mocks and spend no API credit.
+Silent or non-speech demos use local motion/screen evidence only. They require manual semantic review and do not call OpenRouter. The engine currently does not run vision AI, persist discovered moments, calibrate score dimensions against human ratings, or build an `EditSpec`. Local subject and scene classifications are uncertain estimates. Normal tests use gateway mocks and never spend credits.

@@ -35,12 +35,11 @@ public struct MomentCandidate: Codable, Equatable, Sendable {
     public let assetID: AssetID
     public let range: MediaTimeRange
     public let signals: [MomentSignal]
-    public let score: Double
+    public let score: MomentScore
 
     public init(id: UUID = UUID(), assetID: AssetID, range: MediaTimeRange,
-                signals: [MomentSignal], score: Double) throws {
-        guard score.isFinite, (0...1).contains(score),
-              signals.allSatisfy({ range.start <= $0.range.start && $0.range.end <= range.end }) else {
+                signals: [MomentSignal], score: MomentScore) throws {
+        guard signals.allSatisfy({ range.start <= $0.range.start && $0.range.end <= range.end }) else {
             throw ModelError.invalid("MomentCandidate")
         }
         self.id = id
@@ -58,7 +57,73 @@ public struct MomentCandidate: Codable, Equatable, Sendable {
                       assetID: c.decode(AssetID.self, forKey: .assetID),
                       range: c.decode(MediaTimeRange.self, forKey: .range),
                       signals: c.decode([MomentSignal].self, forKey: .signals),
-                      score: c.decode(Double.self, forKey: .score))
+                      score: c.decode(MomentScore.self, forKey: .score))
+    }
+}
+
+/// Explicit evidence dimensions. Dependency and repetition reduce quality.
+public struct MomentScore: Codable, Equatable, Sendable {
+    public let hook: Double
+    public let standaloneCompleteness: Double
+    public let insight: Double
+    public let story: Double
+    public let questionAnswerCompletion: Double
+    public let educationalValue: Double
+    public let interest: Double
+    public let contextDependency: Double
+    public let repetition: Double
+    public let localEvidence: Double
+
+    public init(hook: Double, standaloneCompleteness: Double, insight: Double,
+                story: Double, questionAnswerCompletion: Double, educationalValue: Double,
+                interest: Double, contextDependency: Double, repetition: Double,
+                localEvidence: Double = 0) throws {
+        let values = [hook, standaloneCompleteness, insight, story, questionAnswerCompletion,
+                      educationalValue, interest, contextDependency, repetition, localEvidence]
+        guard values.allSatisfy({ $0.isFinite && (0...1).contains($0) }) else {
+            throw ModelError.invalid("MomentScore")
+        }
+        self.hook = hook
+        self.standaloneCompleteness = standaloneCompleteness
+        self.insight = insight
+        self.story = story
+        self.questionAnswerCompletion = questionAnswerCompletion
+        self.educationalValue = educationalValue
+        self.interest = interest
+        self.contextDependency = contextDependency
+        self.repetition = repetition
+        self.localEvidence = localEvidence
+    }
+
+    public var quality: Double {
+        let positive = (hook + 1.5 * standaloneCompleteness + insight + story +
+                        questionAnswerCompletion + educationalValue + interest + localEvidence) / 8.5
+        return max(0, min(1, positive - 0.2 * contextDependency - 0.15 * repetition))
+    }
+
+    public func withLocalEvidence(_ value: Double) throws -> Self {
+        try Self(hook: hook, standaloneCompleteness: standaloneCompleteness, insight: insight,
+                 story: story, questionAnswerCompletion: questionAnswerCompletion,
+                 educationalValue: educationalValue, interest: interest,
+                 contextDependency: contextDependency, repetition: repetition, localEvidence: value)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case hook, standaloneCompleteness, insight, story, questionAnswerCompletion
+        case educationalValue, interest, contextDependency, repetition, localEvidence
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(hook: c.decode(Double.self, forKey: .hook),
+                      standaloneCompleteness: c.decode(Double.self, forKey: .standaloneCompleteness),
+                      insight: c.decode(Double.self, forKey: .insight), story: c.decode(Double.self, forKey: .story),
+                      questionAnswerCompletion: c.decode(Double.self, forKey: .questionAnswerCompletion),
+                      educationalValue: c.decode(Double.self, forKey: .educationalValue),
+                      interest: c.decode(Double.self, forKey: .interest),
+                      contextDependency: c.decode(Double.self, forKey: .contextDependency),
+                      repetition: c.decode(Double.self, forKey: .repetition),
+                      localEvidence: c.decodeIfPresent(Double.self, forKey: .localEvidence) ?? 0)
     }
 }
 
@@ -70,9 +135,11 @@ public struct ClipProposal: Codable, Equatable, Sendable {
     public let title: String
     public let rationale: String
     public let confidence: Double
+    public let score: MomentScore?
 
     public init(id: UUID = UUID(), assetID: AssetID, range: MediaTimeRange,
-                title: String, rationale: String, confidence: Double) throws {
+                title: String, rationale: String, confidence: Double,
+                score: MomentScore? = nil) throws {
         guard !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               title.count <= 120, rationale.count <= 1000,
               confidence.isFinite, (0...1).contains(confidence) else {
@@ -84,6 +151,7 @@ public struct ClipProposal: Codable, Equatable, Sendable {
         self.title = title
         self.rationale = rationale
         self.confidence = confidence
+        self.score = score
     }
 
     public func validate(for asset: MediaAsset) throws {
@@ -92,7 +160,7 @@ public struct ClipProposal: Codable, Equatable, Sendable {
         }
     }
 
-    private enum CodingKeys: String, CodingKey { case id, assetID, range, title, rationale, confidence }
+    private enum CodingKeys: String, CodingKey { case id, assetID, range, title, rationale, confidence, score }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -101,7 +169,8 @@ public struct ClipProposal: Codable, Equatable, Sendable {
                       range: c.decode(MediaTimeRange.self, forKey: .range),
                       title: c.decode(String.self, forKey: .title),
                       rationale: c.decode(String.self, forKey: .rationale),
-                      confidence: c.decode(Double.self, forKey: .confidence))
+                      confidence: c.decode(Double.self, forKey: .confidence),
+                      score: c.decodeIfPresent(MomentScore.self, forKey: .score))
     }
 }
 
