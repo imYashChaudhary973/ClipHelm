@@ -27,49 +27,71 @@ struct ClipResultsView: View {
     @State private var exporting = false
     @State private var exportFraction = 0.0
     @State private var message: String?
+    @State private var messageTone: StatusTone = .info
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Text("Generated clips").font(.title3.weight(.semibold))
-                Text("\(project.clips.count)").foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: DS.Space.md) {
+            HStack(spacing: DS.Space.sm) {
+                Text("Generated clips").font(.title2.weight(.semibold))
+                    .accessibilityAddTraits(.isHeader)
+                if !project.clips.isEmpty {
+                    Text("\(project.clips.count)")
+                        .font(.callout.weight(.semibold))
+                        .monospacedDigit()
+                        .padding(.horizontal, DS.Space.xs)
+                        .padding(.vertical, 2)
+                        .background(Color.secondary.opacity(0.15), in: Capsule())
+                        .accessibilityLabel("\(project.clips.count) clips")
+                }
                 Spacer()
                 if !project.clips.isEmpty {
-                    Button("Select All") {
-                        selected = Set(project.clips.filter { clip in
-                            guard let exportsDirectory else { return false }
-                            return FileManager.default.fileExists(atPath:
-                                exportsDirectory.appending(path: clip.finalFileName).path)
-                        }.map(\.id))
-                    }
+                    if selected.isEmpty {
+                        Button("Select All") {
+                            selected = Set(project.clips.filter { clip in
+                                guard let exportsDirectory else { return false }
+                                return FileManager.default.fileExists(atPath:
+                                    exportsDirectory.appending(path: clip.finalFileName).path)
+                            }.map(\.id))
+                        }
                         .disabled(exporting)
-                    Button("Export Selected (\(selected.count))") {
-                        chooseExportFolder(for: project.clips.filter { selected.contains($0.id) })
+                    } else {
+                        Text("\(selected.count) selected").foregroundStyle(.secondary)
+                        Button("Deselect All") { selected.removeAll() }
+                            .disabled(exporting)
                     }
+                    Button {
+                        chooseExportFolder(for: project.clips.filter { selected.contains($0.id) })
+                    } label: {
+                        Label("Export Selected (\(selected.count))", systemImage: "square.and.arrow.up")
+                    }
+                    .buttonStyle(.borderedProminent)
                     .disabled(selected.isEmpty || exporting || exportsDirectory == nil)
                 }
             }
             if project.clips.isEmpty {
                 ContentUnavailableView("No clips yet", systemImage: "film.stack",
                     description: Text("Process this project to see its clips here."))
-                    .frame(minHeight: 120)
+                    .frame(maxWidth: .infinity, minHeight: 160)
+                    .surfaceCard()
             } else if let exportsDirectory {
-                LazyVStack(spacing: 0) {
+                // Capped widths keep tall 9:16 cards from growing past a comfortable height.
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: isVerticalOutput ? 170 : 260,
+                                                       maximum: isVerticalOutput ? 220 : 360),
+                                             spacing: DS.Space.md, alignment: .top)],
+                          alignment: .leading, spacing: DS.Space.md) {
                     ForEach(project.clips) { clip in
-                        resultRow(clip, directory: exportsDirectory)
-                        Divider()
+                        resultCard(clip, directory: exportsDirectory)
                     }
                 }
             }
             if exporting {
-                HStack {
-                    ProgressView(value: exportFraction).frame(width: 180)
-                    Text("Exporting clips…").foregroundStyle(.secondary)
-                    Button("Cancel") { exportJob?.cancel() }
+                TaskProgressRow(label: "Exporting clips…", fraction: exportFraction) {
+                    exportJob?.cancel()
                 }
+                .surfaceCard()
             }
             if let message {
-                Text(message).font(.callout).foregroundStyle(.secondary)
+                StatusMessage(text: message, tone: messageTone)
             }
         }
         .sheet(item: $reviewing) { selection in
@@ -94,7 +116,7 @@ struct ClipResultsView: View {
                 do {
                     try deleteClip(id)
                     selected.remove(id)
-                } catch { message = "The clip could not be removed. Try again." }
+                } catch { show("The clip could not be removed. Try again.", .error) }
                 deleting = nil
             }
         } message: {
@@ -103,51 +125,102 @@ struct ClipResultsView: View {
         .onDisappear { exportJob?.cancel() }
     }
 
-    private func resultRow(_ clip: ProjectClipRecord, directory: URL) -> some View {
+    private var isVerticalOutput: Bool {
+        project.outputFormat.height > project.outputFormat.width
+    }
+
+    private func show(_ text: String, _ tone: StatusTone) {
+        message = text
+        messageTone = tone
+    }
+
+    private func resultCard(_ clip: ProjectClipRecord, directory: URL) -> some View {
         let preview = directory.appending(path: clip.previewFileName)
         let final = directory.appending(path: clip.finalFileName)
         let hasPreview = FileManager.default.fileExists(atPath: preview.path)
         let hasFinal = FileManager.default.fileExists(atPath: final.path)
-        return VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 12) {
+        let isSelected = selected.contains(clip.id)
+        let vertical = clip.spec.outputFormat.height > clip.spec.outputFormat.width
+        return VStack(alignment: .leading, spacing: DS.Space.xs) {
+            Button { reviewing = ReviewSelection(clipID: clip.id, autoplay: true) } label: {
+                ResultThumbnail(url: preview, aspectRatio: vertical ? 9 / 16 : 16 / 9)
+                    .frame(maxWidth: .infinity)
+                    .clipShape(RoundedRectangle(cornerRadius: DS.Radius.medium, style: .continuous))
+                    .overlay(alignment: .bottomTrailing) {
+                        Text(ClipTimeLabel.duration(clip.spec))
+                            .font(.caption.weight(.semibold))
+                            .monospacedDigit()
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(.black.opacity(0.65), in: Capsule())
+                            .padding(DS.Space.xs)
+                    }
+                    .overlay {
+                        Image(systemName: "play.circle.fill")
+                            .font(.system(size: 40))
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(.white, .black.opacity(0.45))
+                            .opacity(hasPreview ? 0.9 : 0)
+                    }
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!hasPreview)
+            .help("Play \(clip.title)")
+            .accessibilityLabel("Play \(clip.title)")
+            .overlay(alignment: .topLeading) {
                 Toggle("Select \(clip.title)", isOn: Binding(
-                    get: { selected.contains(clip.id) },
+                    get: { isSelected },
                     set: { if $0 { selected.insert(clip.id) } else { selected.remove(clip.id) } }
                 ))
+                .toggleStyle(.checkbox)
                 .labelsHidden()
+                .padding(6)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: DS.Radius.small))
+                .padding(DS.Space.xs)
                 .disabled(exporting || !hasFinal)
-                ResultThumbnail(url: preview)
-                    .frame(width: 106, height: 72)
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(clip.title).font(.headline).lineLimit(2)
-                    Text("\(ClipTimeLabel.duration(clip.spec)) · Source \(ClipTimeLabel.source(clip.spec)) · \(ClipTimeLabel.aspect(clip.spec.outputFormat))")
-                        .font(.callout).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 0)
             }
+
+            // Two reserved lines keep cards in a row the same height.
+            Text(clip.title).font(.headline)
+                .lineLimit(2, reservesSpace: true)
+                .help(clip.title)
+            Text("Source \(ClipTimeLabel.source(clip.spec)) · \(ClipTimeLabel.aspect(clip.spec.outputFormat))")
+                .font(.callout).foregroundStyle(.secondary)
+                .lineLimit(1)
             if !hasPreview || !hasFinal {
-                Text("A generated file is missing. Reprocess the source or remove this clip from the project.")
-                    .font(.callout).foregroundStyle(.secondary)
+                StatusMessage(text: "A generated file is missing. Reprocess the source or remove this clip from the project.",
+                              tone: .warning)
             }
-            HStack {
-                Spacer()
-                Button("Play") { reviewing = ReviewSelection(clipID: clip.id, autoplay: true) }
-                    .disabled(!hasPreview)
+            HStack(spacing: DS.Space.xs) {
                 Button("Edit") { reviewing = ReviewSelection(clipID: clip.id, autoplay: false) }
                     .disabled(!hasPreview)
                 Button("Export") { chooseExportFolder(for: [clip]) }
                     .disabled(exporting || !hasFinal)
+                Spacer(minLength: 0)
                 Menu {
+                    Button("Play") { reviewing = ReviewSelection(clipID: clip.id, autoplay: true) }
+                        .disabled(!hasPreview)
+                    Divider()
                     Button("Delete from Project", role: .destructive) { deleting = clip.id }
                 } label: {
-                    Image(systemName: "ellipsis")
+                    Image(systemName: "ellipsis.circle")
                         .accessibilityLabel("More actions for \(clip.title)")
                 }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
             }
+            .controlSize(.small)
         }
-        .padding(.vertical, 9)
+        .padding(DS.Space.xs)
+        .background(isSelected ? DS.accent.opacity(0.08) : DS.surface,
+                    in: RoundedRectangle(cornerRadius: DS.Radius.large, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: DS.Radius.large, style: .continuous)
+                .strokeBorder(isSelected ? DS.accent : DS.hairline, lineWidth: isSelected ? 2 : 1)
+        }
     }
 
     private func chooseExportFolder(for clips: [ProjectClipRecord]) {
@@ -172,13 +245,13 @@ struct ClipResultsView: View {
                             from: exportsDirectory, to: destination) { fraction in
                             Task { @MainActor in exportFraction = fraction }
                         }
-                        message = "Exported \(files.count) \(files.count == 1 ? "clip" : "clips")."
+                        show("Exported \(files.count) \(files.count == 1 ? "clip" : "clips").", .success)
                     } catch is CancellationError {
-                        message = "Export cancelled. No new files were kept."
+                        show("Export cancelled. No new files were kept.", .info)
                     } catch let error as LocalizedError {
-                        message = error.errorDescription ?? "Export failed. Check the destination and try again."
+                        show(error.errorDescription ?? "Export failed. Check the destination and try again.", .error)
                     } catch {
-                        message = "Export failed. Check the destination and try again."
+                        show("Export failed. Check the destination and try again.", .error)
                     }
                     exporting = false
                 }
@@ -189,19 +262,24 @@ struct ClipResultsView: View {
 
 private struct ResultThumbnail: View {
     let url: URL
+    let aspectRatio: CGFloat
     @State private var image: NSImage?
 
     var body: some View {
-        ZStack {
-            Color(nsColor: .black)
-            if let image {
-                Image(nsImage: image).resizable().scaledToFit()
-            } else {
-                Image(systemName: "play.rectangle")
-                    .foregroundStyle(.white.opacity(0.6))
+        // The shape sets the size; the frame is an overlay so it can never resize the cell.
+        DS.videoBackground
+            .aspectRatio(aspectRatio, contentMode: .fit)
+            .overlay {
+                if let image {
+                    Image(nsImage: image).resizable().scaledToFill()
+                } else {
+                    Image(systemName: "film")
+                        .font(.title)
+                        .foregroundStyle(.white.opacity(0.4))
+                }
             }
-        }
-        .accessibilityLabel("Video preview")
+            .clipped()
+            .accessibilityLabel("Video preview")
         .task(id: url) {
             image = nil
             guard FileManager.default.fileExists(atPath: url.path) else { return }
@@ -209,7 +287,8 @@ private struct ResultThumbnail: View {
                 AVURLAssetReferenceRestrictionsKey: AVAssetReferenceRestrictions.forbidAll.rawValue
             ]))
             generator.appliesPreferredTrackTransform = true
-            generator.maximumSize = CGSize(width: 320, height: 180)
+            // Large enough for a sharp card thumbnail in either orientation.
+            generator.maximumSize = CGSize(width: 540, height: 540)
             if let (frame, _) = try? await generator.image(at: .zero) {
                 image = NSImage(cgImage: frame, size: .zero)
             }
@@ -265,6 +344,8 @@ struct ClipReviewView: View {
     @State private var job: Task<Void, Never>?
     @State private var message: String?
     @State private var confirmDelete = false
+    @State private var confirmDiscard = false
+    @State private var messageTone: StatusTone = .info
     private let autoplay: Bool
 
     init(clip: ProjectClipRecord, project: ProjectRecord, source: PreparedSource?,
@@ -295,127 +376,229 @@ struct ClipReviewView: View {
         _focusY = State(initialValue: rect.map { $0.y + $0.height / 2 } ?? 0.5)
     }
 
+    private var isVertical: Bool {
+        current.spec.outputFormat.height > current.spec.outputFormat.width
+    }
+
+    private var editingLocked: Bool { busy || source == nil || cacheDirectory == nil }
+
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Review Clip").font(.title2.weight(.semibold))
-                        Text("\(ClipTimeLabel.duration(current.spec)) · Source \(ClipTimeLabel.source(current.spec)) · \(ClipTimeLabel.aspect(current.spec.outputFormat))")
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button("Done") { dismiss() }
+        VStack(spacing: 0) {
+            header
+                .padding(.horizontal, DS.Space.lg)
+                .padding(.vertical, DS.Space.md)
+            Divider()
+            // Tall clips sit beside the controls; wide clips sit above them.
+            if isVertical {
+                HStack(alignment: .top, spacing: 0) {
+                    playerView
+                        .aspectRatio(9 / 16, contentMode: .fit)
+                        .frame(maxWidth: 340)
+                        .padding(DS.Space.lg)
+                    Divider()
+                    editorForm
                 }
-                VideoPlayer(player: player)
-                    .frame(height: 310)
-                    .background(.black)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                if source == nil || cacheDirectory == nil {
-                    Label("Locate the original video in the workspace to edit framing, pacing, trim, or captions. Rename, playback, and export still work.",
-                          systemImage: "info.circle")
-                        .font(.callout).foregroundStyle(.secondary)
-                }
-                Form {
-                    Section("Clip") {
-                        TextField("Title", text: $title)
-                        LabeledContent("Output", value: "\(current.spec.outputFormat.width) × \(current.spec.outputFormat.height)")
-                    }
-                    Section("Framing") {
-                        Picker("Mode", selection: $framing) {
-                            ForEach([FramingMode.smartAuto, .fullFrame, .classicFullFrame, .blurred], id: \.self) {
-                                Text($0.label).tag($0)
-                            }
-                        }
-                        if framing == .fullFrame {
-                            LabeledContent("Horizontal focus") {
-                                Slider(value: $focusX, in: 0...1).frame(width: 220)
-                            }
-                            LabeledContent("Vertical focus") {
-                                Slider(value: $focusY, in: 0...1).frame(width: 220)
-                            }
-                        }
-                        Button("Regenerate Framing") {
-                            framing = .smartAuto
-                            focusX = 0.5
-                            focusY = 0.5
-                            saveChanges(forceRender: true)
-                        }
-                        .disabled(busy || source == nil || cacheDirectory == nil)
-                    }
-                    .disabled(busy || source == nil || cacheDirectory == nil)
-                    Section("Pacing and Trim") {
-                        Picker("Pacing", selection: $pacing) {
-                            ForEach(PacingMode.allCases, id: \.self) { Text($0.label).tag($0) }
-                        }
-                        HStack {
-                            Text("In").frame(width: 38, alignment: .leading)
-                            TextField("Seconds", value: $trimStart,
-                                format: .number.precision(.fractionLength(2)))
-                                .frame(width: 95)
-                            Text("Out").frame(width: 38, alignment: .leading)
-                            TextField("Seconds", value: $trimEnd,
-                                format: .number.precision(.fractionLength(2)))
-                                .frame(width: 95)
-                            Text("seconds in source").foregroundStyle(.secondary)
-                        }
-                        Text("Available: \(ClipTimeLabel.clock(current.proposal.range.start))–\(ClipTimeLabel.clock(current.proposal.range.end)). Pacing recalculates pause cuts inside the trim.")
-                            .font(.callout).foregroundStyle(.secondary)
-                    }
-                    .disabled(busy || source == nil || cacheDirectory == nil)
-                    Section("Captions") {
-                        Picker("Style", selection: $captions) {
-                            Text("Off").tag(nil as CaptionStyle?)
-                            ForEach(Self.styles, id: \.self) { style in
-                                Text(style.label).tag(Optional(style))
-                            }
-                        }
-                        .disabled(project.transcript?.hasMeaningfulSpeech != true)
-                        if project.transcript?.hasMeaningfulSpeech != true {
-                            Text("No meaningful speech was found for captions.")
-                                .font(.callout).foregroundStyle(.secondary)
-                        }
-                    }
-                    .disabled(busy || source == nil || cacheDirectory == nil)
-                }
-                .formStyle(.grouped)
-                if busy {
-                    HStack {
-                        ProgressView(value: renderFraction).frame(width: 180)
-                        Text(renderStage).foregroundStyle(.secondary)
-                        Button("Cancel") { job?.cancel() }
-                    }
-                }
-                if let message { Text(message).font(.callout).foregroundStyle(.secondary) }
-                HStack {
-                    Button("Save Changes") { saveChanges() }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(busy)
-                    Button("Export") { exportClip(current) }
-                        .disabled(busy || hasUnsavedChanges)
-                    Spacer()
-                    Button("Delete from Project", role: .destructive) { confirmDelete = true }
-                        .disabled(busy)
+            } else {
+                VStack(spacing: 0) {
+                    playerView
+                        .aspectRatio(16 / 9, contentMode: .fit)
+                        .frame(maxWidth: .infinity, maxHeight: 340)
+                        .padding(.horizontal, DS.Space.lg)
+                        .padding(.top, DS.Space.md)
+                    editorForm
                 }
             }
-            .padding(24)
+            Divider()
+            footer
+                .padding(.horizontal, DS.Space.lg)
+                .padding(.vertical, DS.Space.sm)
+                .background(.bar)
         }
-        .frame(minWidth: 540, idealWidth: 700, minHeight: 500, idealHeight: 760)
+        .frame(minWidth: isVertical ? 760 : 560, idealWidth: isVertical ? 880 : 720,
+               minHeight: 560, idealHeight: 800)
+        .interactiveDismissDisabled(hasUnsavedChanges)
         .onAppear { if autoplay { player.play() } }
         .onDisappear { player.pause(); job?.cancel() }
         .confirmationDialog("Delete this clip from the project?", isPresented: $confirmDelete) {
             Button("Delete Clip", role: .destructive) {
                 do { try deleteClip(current.id) }
-                catch { message = "The clip could not be removed. Try again." }
+                catch { show("The clip could not be removed. Try again.", .error) }
             }
         } message: {
             Text("Its generated project files will be removed. Files already exported elsewhere stay untouched.")
         }
+        .confirmationDialog("Discard unsaved changes?", isPresented: $confirmDiscard) {
+            Button("Discard Changes", role: .destructive) { dismiss() }
+            Button("Keep Editing", role: .cancel) { }
+        } message: {
+            Text("The clip keeps its last saved title, framing, pacing, trim, and captions.")
+        }
     }
 
-    private static let styles: [CaptionStyle] = [
-        .pop, .spotlight, .impact, .glowBox, .editorial, .highPunch, .neonHeadline, .paper
-    ]
+    private var header: some View {
+        HStack(alignment: .center, spacing: DS.Space.sm) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Review Clip").font(.title2.weight(.semibold))
+                    .accessibilityAddTraits(.isHeader)
+                Text("\(ClipTimeLabel.duration(current.spec)) · Source \(ClipTimeLabel.source(current.spec)) · \(ClipTimeLabel.aspect(current.spec.outputFormat))")
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            if hasUnsavedChanges {
+                StatusBadge(text: "Unsaved changes", tone: .warning)
+            }
+            Button("Done") { requestDismiss() }
+                .keyboardShortcut(.cancelAction)
+        }
+    }
+
+    private var playerView: some View {
+        VideoPlayer(player: player)
+            .background(DS.videoBackground)
+            .clipShape(RoundedRectangle(cornerRadius: DS.Radius.large, style: .continuous))
+    }
+
+    private var editorForm: some View {
+        Form {
+            if source == nil || cacheDirectory == nil {
+                Section {
+                    StatusMessage(text: "Locate the original video in the workspace to edit framing, pacing, trim, or captions. Rename, playback, and export still work.",
+                                  tone: .info)
+                }
+            }
+            Section("Clip") {
+                TextField("Title", text: $title)
+                LabeledContent("Output", value: "\(current.spec.outputFormat.width) × \(current.spec.outputFormat.height)")
+            }
+            Section("Framing") {
+                Picker("Mode", selection: $framing) {
+                    ForEach([FramingMode.smartAuto, .fullFrame, .classicFullFrame, .blurred], id: \.self) {
+                        Label($0.label, systemImage: $0.symbol).tag($0)
+                    }
+                }
+                Text(framing.description).font(.callout).foregroundStyle(.secondary)
+                if framing == .fullFrame {
+                    LabeledContent("Horizontal focus") {
+                        Slider(value: $focusX, in: 0...1) {
+                            Text("Horizontal focus")
+                        } minimumValueLabel: {
+                            Image(systemName: "arrow.left").accessibilityHidden(true)
+                        } maximumValueLabel: {
+                            Image(systemName: "arrow.right").accessibilityHidden(true)
+                        }
+                        .labelsHidden()
+                        .frame(width: 240)
+                    }
+                    LabeledContent("Vertical focus") {
+                        Slider(value: $focusY, in: 0...1) {
+                            Text("Vertical focus")
+                        } minimumValueLabel: {
+                            Image(systemName: "arrow.up").accessibilityHidden(true)
+                        } maximumValueLabel: {
+                            Image(systemName: "arrow.down").accessibilityHidden(true)
+                        }
+                        .labelsHidden()
+                        .frame(width: 240)
+                    }
+                }
+                Button("Regenerate Framing") {
+                    framing = .smartAuto
+                    focusX = 0.5
+                    focusY = 0.5
+                    saveChanges(forceRender: true)
+                }
+                .disabled(editingLocked)
+                .help("Reset to Smart Auto Frame and render again")
+            }
+            .disabled(editingLocked)
+            Section("Pacing and Trim") {
+                Picker("Pacing", selection: $pacing) {
+                    ForEach(PacingMode.allCases, id: \.self) { Text($0.label).tag($0) }
+                }
+                Text(pacing.detail).font(.callout).foregroundStyle(.secondary)
+                LabeledContent("In") {
+                    HStack {
+                        TextField("In", value: $trimStart,
+                            format: .number.precision(.fractionLength(2)))
+                            .labelsHidden()
+                            .monospacedDigit()
+                            .frame(width: 90)
+                        Text("seconds in source").foregroundStyle(.secondary)
+                    }
+                }
+                LabeledContent("Out") {
+                    HStack {
+                        TextField("Out", value: $trimEnd,
+                            format: .number.precision(.fractionLength(2)))
+                            .labelsHidden()
+                            .monospacedDigit()
+                            .frame(width: 90)
+                        Text("seconds in source").foregroundStyle(.secondary)
+                    }
+                }
+                Text("Available: \(ClipTimeLabel.clock(current.proposal.range.start))–\(ClipTimeLabel.clock(current.proposal.range.end)). Pacing recalculates pause cuts inside the trim.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+            .disabled(editingLocked)
+            Section("Captions") {
+                Picker("Style", selection: $captions) {
+                    Text("Off").tag(nil as CaptionStyle?)
+                    ForEach(CaptionStyle.pickerOrder, id: \.self) { style in
+                        Text(style.label).tag(Optional(style))
+                    }
+                }
+                .disabled(project.transcript?.hasMeaningfulSpeech != true)
+                if let captions {
+                    CaptionStyleSwatch(style: captions)
+                        .frame(height: 56)
+                        .clipShape(RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous))
+                }
+                if project.transcript?.hasMeaningfulSpeech != true {
+                    Text("No meaningful speech was found for captions.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+            }
+            .disabled(editingLocked)
+        }
+        .formStyle(.grouped)
+    }
+
+    private var footer: some View {
+        VStack(alignment: .leading, spacing: DS.Space.xs) {
+            if busy {
+                TaskProgressRow(label: renderStage, fraction: renderFraction) { job?.cancel() }
+            } else if let message {
+                StatusMessage(text: message, tone: messageTone)
+            }
+            HStack(spacing: DS.Space.sm) {
+                Button("Delete from Project", role: .destructive) { confirmDelete = true }
+                    .disabled(busy)
+                Spacer()
+                Button {
+                    exportClip(current)
+                } label: {
+                    Label("Export", systemImage: "square.and.arrow.up")
+                }
+                .disabled(busy || hasUnsavedChanges)
+                .help(hasUnsavedChanges ? "Save changes before exporting" : "Export this clip")
+                Button("Save Changes") { saveChanges() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(busy || !hasUnsavedChanges)
+                    .keyboardShortcut("s", modifiers: .command)
+            }
+            .controlSize(.large)
+        }
+    }
+
+    private func requestDismiss() {
+        if hasUnsavedChanges && !busy { confirmDiscard = true } else { dismiss() }
+    }
+
+    private func show(_ text: String, _ tone: StatusTone) {
+        message = text
+        messageTone = tone
+    }
 
     private var hasUnsavedChanges: Bool {
         let trim = current.trimRange ?? current.proposal.range
@@ -435,14 +618,14 @@ struct ClipReviewView: View {
         let cleanedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanedTitle.isEmpty, cleanedTitle.count <= 120,
               !cleanedTitle.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else {
-            message = "Use a title between 1 and 120 characters without control characters."
+            show("Use a title between 1 and 120 characters without control characters.", .error)
             return
         }
         let lower = Double(current.proposal.range.start.microseconds) / 1_000_000
         let upper = Double(current.proposal.range.end.microseconds) / 1_000_000
         guard trimStart.isFinite, trimEnd.isFinite, trimStart >= lower,
               trimEnd <= upper, trimEnd - trimStart >= 0.5 else {
-            message = "Keep trim times inside the available source range, at least half a second apart."
+            show("Keep trim times inside the available source range, at least half a second apart.", .error)
             return
         }
         do {
@@ -463,11 +646,11 @@ struct ClipReviewView: View {
                 renamed.title = cleanedTitle
                 try saveClip(renamed)
                 current = renamed
-                message = "Clip renamed."
+                show("Clip renamed.", .success)
                 return
             }
             guard let source, let cacheDirectory else {
-                message = "Locate the original source in the workspace before changing this clip."
+                show("Locate the original source in the workspace before changing this clip.", .warning)
                 return
             }
             busy = true
@@ -515,23 +698,23 @@ struct ClipReviewView: View {
                     player.pause()
                     player.replaceCurrentItem(with: Self.localItem(preview))
                     renderFraction = 1
-                    message = "Changes saved. Preview the new clip before exporting."
+                    show("Changes saved. Preview the new clip before exporting.", .success)
                 } catch is CancellationError {
                     try? FileManager.default.removeItem(at: preview)
                     try? FileManager.default.removeItem(at: final)
-                    message = "Edit cancelled. The previous clip is unchanged."
+                    show("Edit cancelled. The previous clip is unchanged.", .info)
                 } catch let error as LocalizedError {
                     try? FileManager.default.removeItem(at: preview)
                     try? FileManager.default.removeItem(at: final)
-                    message = error.errorDescription ?? "The edit could not be saved. Try again."
+                    show(error.errorDescription ?? "The edit could not be saved. Try again.", .error)
                 } catch {
                     try? FileManager.default.removeItem(at: preview)
                     try? FileManager.default.removeItem(at: final)
-                    message = "The edit could not be saved. Check the original source and try again."
+                    show("The edit could not be saved. Check the original source and try again.", .error)
                 }
             }
         } catch {
-            message = "The trim range is invalid."
+            show("The trim range is invalid.", .error)
         }
     }
 

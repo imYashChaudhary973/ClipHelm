@@ -20,6 +20,16 @@ rm -rf "$app_dir"
 mkdir -p "$app_dir/Contents/MacOS"
 cp "$build_dir/$configuration/ClipHelmApp" "$app_dir/Contents/MacOS/ClipHelmApp"
 cp "$repo_dir/Resources/Info.plist" "$app_dir/Contents/Info.plist"
+
+# Compile the Icon Composer source into Assets.car (Liquid Glass icon) plus a
+# ClipHelm.icns fallback for earlier macOS versions.
+mkdir -p "$app_dir/Contents/Resources"
+xcrun actool "$repo_dir/Resources/ClipHelm.icon" \
+  --compile "$app_dir/Contents/Resources" \
+  --platform macosx --minimum-deployment-target 14.0 \
+  --app-icon ClipHelm \
+  --output-partial-info-plist "$build_dir/icon-partial.plist" \
+  --output-format human-readable-text >/dev/null
 if [[ "$configuration" == release && -n "${CLIPHELM_SIGNING_IDENTITY:-}" ]]; then
   if [[ "$CLIPHELM_SIGNING_IDENTITY" == "-" ]]; then
     echo "Release signing requires a Developer ID Application identity." >&2

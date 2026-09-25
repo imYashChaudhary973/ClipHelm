@@ -31,18 +31,7 @@ struct AppShell: View {
 
     var body: some View {
         NavigationSplitView {
-            List(selection: $navigation.route) {
-                Section {
-                    Label("Home", systemImage: "house").tag(AppRoute.home)
-                    Label("Recent Projects", systemImage: "clock.arrow.circlepath").tag(AppRoute.recent)
-                    Label("New Clip Project", systemImage: "plus.square.on.square").tag(AppRoute.newProject)
-                }
-                Section {
-                    Label("Settings", systemImage: "gearshape").tag(AppRoute.settings)
-                }
-            }
-            .listStyle(.sidebar)
-            .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 260)
+            SidebarView(navigation: navigation, projects: store.projects)
         } detail: {
             Group {
                 switch navigation.route {
@@ -121,181 +110,226 @@ struct AppShell: View {
 
     private var home: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                Text("CLIPHELM")
-                    .font(.caption.weight(.semibold))
-                    .tracking(2.5)
-                    .foregroundStyle(.secondary)
-                Text("A better cut starts\nwith the right moment.")
-                    .font(.system(size: 42, weight: .semibold, design: .rounded))
-                    .tracking(-1.5)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text("Set the source and the edit direction. ClipHelm will bring the best moments into a workspace you can review.")
-                    .font(.title3)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: 640, alignment: .leading)
-                QuickClipView(ingestor: sourceIngestor, onReady: startQuickProject)
-                    .padding(.top, 8)
-                Button("New Clip Project…") {
-                    navigation.startProject()
-                }
-                .help("Choose a local file or customize format, framing, length, and captions")
-
-                Divider().padding(.vertical, 18)
-                HStack {
-                    Text("Recent Projects").font(.title2.weight(.semibold))
-                    Spacer()
-                    Button("View All") { navigation.route = .recent }
-                        .buttonStyle(.link)
-                }
-                if store.projects.isEmpty {
-                    Text("Your projects will appear here after you save a draft.")
+            VStack(alignment: .leading, spacing: DS.Space.xl) {
+                VStack(alignment: .leading, spacing: DS.Space.md) {
+                    HStack(spacing: DS.Space.sm) {
+                        AppLogo(size: 48)
+                        Eyebrow("ClipHelm")
+                    }
+                    Text("A better cut starts\nwith the right moment.")
+                        .font(.system(size: 40, weight: .semibold, design: .rounded))
+                        .tracking(-1)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityAddTraits(.isHeader)
+                    Text("Paste a YouTube link for captioned clips in one step, or set up a project to shape every detail.")
+                        .font(.title3)
                         .foregroundStyle(.secondary)
-                        .padding(.vertical, 20)
-                } else {
-                    ForEach(store.projects.prefix(3)) { project in
-                        projectRow(project)
+                        .frame(maxWidth: 600, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                VStack(alignment: .leading, spacing: DS.Space.sm) {
+                    QuickClipView(ingestor: sourceIngestor, onReady: startQuickProject)
+                    HStack(spacing: DS.Space.sm) {
+                        Text("Have a local file, or want to choose format, framing, and captions?")
+                            .foregroundStyle(.secondary)
+                        Button("New Clip Project…") {
+                            navigation.startProject()
+                        }
+                        .help("Choose a local file or customize format, framing, length, and captions (⌘N)")
+                    }
+                    .font(.callout)
+                }
+
+                UniformGrid(minimumWidth: 200) {
+                    howItWorks
+                }
+
+                VStack(alignment: .leading, spacing: DS.Space.sm) {
+                    HStack {
+                        Text("Recent Projects").font(.title2.weight(.semibold))
+                            .accessibilityAddTraits(.isHeader)
+                        Spacer()
+                        if !store.projects.isEmpty {
+                            Button("View All") { navigation.route = .recent }
+                                .buttonStyle(.link)
+                        }
+                    }
+                    if store.projects.isEmpty {
+                        StatusMessage(text: "Your projects will appear here after you create one.", tone: .neutral)
+                            .padding(.vertical, DS.Space.xs)
+                    } else {
+                        projectList(Array(store.projects.prefix(3)))
                     }
                 }
             }
-            .frame(maxWidth: 780, alignment: .leading)
-            .padding(48)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .readableColumn(DS.Width.form + 80, padding: DS.Space.xxl)
         }
+    }
+
+    @ViewBuilder
+    private var howItWorks: some View {
+        howItWorksStep(1, "Choose a source", "A local video or a YouTube link you may process.", "film")
+        howItWorksStep(2, "Set the direction", "Format, framing, length, sound, and captions.", "slider.horizontal.3")
+        howItWorksStep(3, "Review the clips", "Play, trim, reframe, and export what you keep.", "rectangle.stack.badge.play")
+    }
+
+    private func howItWorksStep(_ number: Int, _ title: String, _ detail: String,
+                                _ symbol: String) -> some View {
+        VStack(alignment: .leading, spacing: DS.Space.xs) {
+            Image(systemName: symbol)
+                .font(.title2)
+                .foregroundStyle(DS.accent)
+                .frame(height: 28, alignment: .leading)
+                .accessibilityHidden(true)
+            Text("\(number). \(title)").font(.headline)
+            Text(detail).font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .surfaceCard()
+        .accessibilityElement(children: .combine)
     }
 
     private var recent: some View {
         Group {
             if store.projects.isEmpty {
                 ContentUnavailableView {
-                    Label("No Projects Yet", systemImage: "film.stack")
+                    Label {
+                        Text("No Projects Yet")
+                    } icon: {
+                        AppLogo(size: 64)
+                    }
                 } description: {
                     Text("Start a new clip project to create a workspace.")
                 } actions: {
                     Button("New Clip Project") {
                         navigation.startProject()
                     }
+                    .buttonStyle(.borderedProminent)
                 }
             } else {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text("RECENT PROJECTS")
-                            .font(.caption.weight(.semibold))
-                            .tracking(1.6)
-                            .foregroundStyle(.secondary)
-                            .padding(.bottom, 16)
-                        ForEach(store.projects) { project in
-                            projectRow(project)
-                        }
+                    VStack(alignment: .leading, spacing: DS.Space.lg) {
+                        PageHeader(title: "Recent Projects",
+                                   subtitle: "\(store.projects.count) \(store.projects.count == 1 ? "project" : "projects") saved on this Mac")
+                        projectList(store.projects)
                     }
-                    .frame(maxWidth: 800, alignment: .leading)
-                    .padding(40)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .readableColumn(DS.Width.form + 80, padding: DS.Space.xl)
                 }
             }
         }
-        .overlay(alignment: .top) {
+        .safeAreaInset(edge: .top) {
             if let loadError = store.loadError {
-                Text(loadError)
-                    .font(.callout)
-                    .foregroundStyle(.orange)
-                    .padding(12)
+                StatusMessage(text: loadError, tone: .warning)
+                    .padding(DS.Space.sm)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.bar)
             }
+        }
+    }
+
+    private func projectList(_ projects: [ProjectRecord]) -> some View {
+        VStack(spacing: 0) {
+            ForEach(Array(projects.enumerated()), id: \.element.id) { index, project in
+                if index > 0 { Divider().padding(.leading, 64) }
+                projectRow(project)
+            }
+        }
+        .background(DS.surface, in: RoundedRectangle(cornerRadius: DS.Radius.large, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: DS.Radius.large, style: .continuous)
+                .strokeBorder(DS.hairline)
         }
     }
 
     private func projectRow(_ project: ProjectRecord) -> some View {
-        Button {
-            navigation.openProject(project.id.rawValue)
-        } label: {
-            HStack(spacing: 16) {
-                Image(systemName: "film.stack")
-                    .font(.title2)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 36)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(project.title).font(.headline)
-                    Text("\(project.sourceLabel) · \(project.clips.isEmpty ? "Draft project" : "\(project.clips.count) clips")")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Text(project.createdAt, style: .date)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                Image(systemName: "chevron.right")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-            }
-            .padding(.vertical, 13)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Open \(project.title)")
-        .overlay(alignment: .bottom) { Divider() }
+        ProjectRow(project: project) { navigation.openProject(project.id.rawValue) }
     }
 
     private var settings: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 26) {
-                Text("Settings")
-                    .font(.largeTitle.weight(.semibold))
-                LabeledContent("Appearance", value: "Follows macOS")
-                Divider()
-                LabeledContent("Project storage", value: "Application Support / ClipHelm / Projects")
-                Text("Project drafts and source metadata are saved on this Mac. Source access must be granted again after relaunch.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                Divider()
-                OpenRouterSettingsView()
-                Divider()
-                YouTubeToolSettingsView()
-                Divider()
-                Text("Keyboard Shortcuts").font(.headline)
-                LabeledContent("New project", value: "⌘N")
-                LabeledContent("Home / Recent", value: "⌘1 / ⌘2")
-                LabeledContent("Inspector", value: "⌘I")
+            VStack(alignment: .leading, spacing: DS.Space.lg) {
+                PageHeader(title: "Settings")
+                settingsGroup("General", systemImage: "gearshape") {
+                    LabeledContent("Appearance", value: "Follows macOS")
+                    Divider()
+                    LabeledContent("Project storage", value: "Application Support / ClipHelm / Projects")
+                    Text("Project drafts and source metadata are saved on this Mac. Source access must be granted again after relaunch.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                settingsGroup("OpenRouter", systemImage: "key") {
+                    OpenRouterSettingsView()
+                }
+                settingsGroup("YouTube Downloader", systemImage: "arrow.down.circle") {
+                    YouTubeToolSettingsView()
+                }
+                settingsGroup("About", systemImage: "info.circle") {
+                    HStack(spacing: DS.Space.md) {
+                        AppLogo(size: 56)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("ClipHelm").font(.title3.weight(.semibold))
+                            Text(Self.versionLabel).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                settingsGroup("Keyboard Shortcuts", systemImage: "keyboard") {
+                    shortcut("New project", "⌘N")
+                    shortcut("Home / Recent Projects", "⌘1 / ⌘2")
+                    shortcut("Settings", "⌘,")
+                    shortcut("Toggle inspector", "⌘I")
+                    shortcut("Previous / next setup step", "⌘[ / ⌘]")
+                }
             }
-            .frame(maxWidth: 640, alignment: .leading)
-            .padding(40)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .readableColumn(DS.Width.form, padding: DS.Space.xl)
+        }
+    }
+
+    private func settingsGroup<Content: View>(_ title: String, systemImage: String,
+                                              @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: DS.Space.sm) {
+            Label(title, systemImage: systemImage)
+                .font(.headline)
+                .accessibilityAddTraits(.isHeader)
+            VStack(alignment: .leading, spacing: DS.Space.sm) { content() }
+                .surfaceCard()
+        }
+    }
+
+    private func shortcut(_ title: String, _ keys: String) -> some View {
+        LabeledContent(title) {
+            Text(keys).font(.body.monospaced()).foregroundStyle(.secondary)
         }
     }
 
     private func workspace(_ project: ProjectRecord) -> some View {
         ScrollView {
-        VStack(alignment: .leading, spacing: 20) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(project.title).font(.title2.weight(.semibold))
-                    Text(project.clips.isEmpty ? "Project workspace" : "\(project.clips.count) clips saved")
-                        .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: DS.Space.lg) {
+                PageHeader(eyebrow: project.sourceLabel, title: project.title) {
+                    StatusBadge(text: project.clips.isEmpty ? "Draft" : "\(project.clips.count) clips saved",
+                                tone: project.clips.isEmpty ? .neutral : .success)
                 }
-                Spacer()
-                Label("Saved", systemImage: "checkmark.circle")
-                    .foregroundStyle(.secondary)
+                if !project.clips.isEmpty {
+                    results(project)
+                }
+                WorkspacePlaybackView(project: project, source: sessionSources[project.id],
+                    analysisCacheDirectory: try? store.analysisCacheDirectory(for: project.id),
+                    exportsDirectory: try? store.exportsDirectory(for: project.id),
+                    ingestor: sourceIngestor,
+                    autoProcess: autoProcessProjects.contains(project.id),
+                    didStartAutoProcess: { autoProcessProjects.remove(project.id) },
+                    saveTranscript: { try store.saveTranscript($0, for: project.id) },
+                    saveProcessingResult: { try store.saveProcessingResult($0, for: project.id) },
+                    reattachSource: { try await reattachSource($0, to: project) },
+                    reattachRemote: { try await reattachRemote($0, authorized: $1,
+                        to: project, progress: $2) })
+                if project.clips.isEmpty {
+                    results(project)
+                }
             }
-            if !project.clips.isEmpty {
-                results(project)
-                Divider()
-            }
-            WorkspacePlaybackView(project: project, source: sessionSources[project.id],
-                analysisCacheDirectory: try? store.analysisCacheDirectory(for: project.id),
-                exportsDirectory: try? store.exportsDirectory(for: project.id),
-                ingestor: sourceIngestor,
-                autoProcess: autoProcessProjects.contains(project.id),
-                didStartAutoProcess: { autoProcessProjects.remove(project.id) },
-                saveTranscript: { try store.saveTranscript($0, for: project.id) },
-                saveProcessingResult: { try store.saveProcessingResult($0, for: project.id) },
-                reattachSource: { try await reattachSource($0, to: project) },
-                reattachRemote: { try await reattachRemote($0, authorized: $1,
-                    to: project, progress: $2) })
-            if project.clips.isEmpty {
-                Divider()
-                results(project)
-            }
-        }
-        .padding(24)
+            .readableColumn(DS.Width.content, padding: DS.Space.lg)
         }
     }
 
@@ -399,9 +433,61 @@ struct AppShell: View {
             fileURL: prepared.fileURL, asset: original, hasAudio: prepared.hasAudio)
     }
 
+    private static var versionLabel: String {
+        let info = Bundle.main.infoDictionary
+        guard let version = info?["CFBundleShortVersionString"] as? String else { return "Development build" }
+        let build = info?["CFBundleVersion"] as? String
+        return build.map { "Version \(version) (\($0))" } ?? "Version \(version)"
+    }
+
     private static func durationLabel(_ duration: MediaTime) -> String {
         let seconds = duration.microseconds / 1_000_000
         return "\(seconds / 60):\(String(format: "%02d", seconds % 60))"
+    }
+}
+
+private struct ProjectRow: View {
+    let project: ProjectRecord
+    let open: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: open) {
+            HStack(spacing: DS.Space.sm) {
+                Image(systemName: project.outputFormat.height > project.outputFormat.width
+                      ? "rectangle.portrait" : "rectangle")
+                    .font(.title3)
+                    .foregroundStyle(DS.accent)
+                    .frame(width: 40, height: 40)
+                    .background(DS.accent.opacity(0.1),
+                                in: RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous))
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(project.title).font(.headline).lineLimit(1)
+                    Text("\(project.sourceLabel) · \(project.clips.isEmpty ? "Draft" : "\(project.clips.count) clips")")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer(minLength: DS.Space.xs)
+                Text(project.createdAt, style: .date)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
+            }
+            .padding(.horizontal, DS.Space.sm)
+            .padding(.vertical, DS.Space.sm)
+            .background(hovering ? Color.primary.opacity(0.04) : .clear)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help(project.title)
+        .accessibilityLabel("Open \(project.title)")
     }
 }
 

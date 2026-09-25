@@ -80,26 +80,24 @@ struct OpenRouterSettingsView: View {
     @State private var keyInput = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("OpenRouter").font(.title2.weight(.semibold))
-            if model.connected {
-                Label("Connected", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-                HStack {
+        VStack(alignment: .leading, spacing: DS.Space.sm) {
+            HStack(spacing: DS.Space.sm) {
+                StatusBadge(text: model.connected ? "Connected" : "Not connected",
+                            tone: model.connected ? .success : .neutral)
+                if model.isBusy { ProgressView().controlSize(.small) }
+                Spacer()
+                if model.connected {
                     Button("Test") { Task { await model.test() } }
-                    Button("Replace") { presentKeySheet(replacing: true) }
-                    Button("Remove", role: .destructive) { showingRemoveConfirmation = true }
+                    Button("Replace…") { presentKeySheet(replacing: true) }
+                    Button("Remove…", role: .destructive) { showingRemoveConfirmation = true }
+                } else {
+                    Button("Add API Key…") { presentKeySheet(replacing: false) }
+                        .buttonStyle(.borderedProminent)
                 }
-                .disabled(model.isBusy)
-            } else {
-                Text("Not connected")
-                    .foregroundStyle(.secondary)
-                Button("Add API Key") { presentKeySheet(replacing: false) }
-                    .disabled(model.isBusy)
             }
-            if model.isBusy { ProgressView().controlSize(.small) }
+            .disabled(model.isBusy)
             if let message = model.message {
-                Text(message).font(.callout).foregroundStyle(.secondary)
+                StatusMessage(text: message, tone: .info)
             }
             Text("Your API key is stored only in macOS Keychain. Test checks the key without running a model.")
                 .font(.callout)
@@ -107,9 +105,10 @@ struct OpenRouterSettingsView: View {
         }
         .task { await model.refresh() }
         .sheet(isPresented: $showingKeySheet, onDismiss: { keyInput = "" }) {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: DS.Space.md) {
                 Text(replacing ? "Replace API Key" : "Add API Key")
                     .font(.title2.weight(.semibold))
+                    .accessibilityAddTraits(.isHeader)
                 SecureField("OpenRouter API key", text: $keyInput)
                     .textFieldStyle(.roundedBorder)
                     .accessibilityLabel("OpenRouter API key")
@@ -119,6 +118,7 @@ struct OpenRouterSettingsView: View {
                 HStack {
                     Spacer()
                     Button("Cancel") { showingKeySheet = false }
+                        .keyboardShortcut(.cancelAction)
                     Button("Save") {
                         let key = keyInput
                         keyInput = ""
@@ -127,9 +127,10 @@ struct OpenRouterSettingsView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(keyInput.isEmpty)
+                    .keyboardShortcut(.defaultAction)
                 }
             }
-            .padding(24)
+            .padding(DS.Space.lg)
             .frame(width: 440)
         }
         .confirmationDialog("Remove OpenRouter API key?", isPresented: $showingRemoveConfirmation) {

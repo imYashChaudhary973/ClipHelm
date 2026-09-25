@@ -1,0 +1,120 @@
+{
+  "features": [
+    "refractivity"
+  ],
+  "fill-specializations": [
+    {
+      "value": {
+        "solid": "extended-srgb:0.06275,0.14902,0.21961,1.00000"
+      }
+    },
+    {
+      "appearance": "dark",
+      "value": {
+        "solid": "extended-srgb:0.02353,0.05098,0.11765,1.00000"
+      }
+    }
+  ],
+  "groups": [
+    {
+      "name": "03 Audio Bars",
+      "layers": [
+        {
+          "name": "Signal Faces",
+          "image-name": "07-Bars-Face.png",
+          "glass": true,
+          "hidden": false
+        },
+        {
+          "name": "Signal Depth",
+          "image-name": "06-Bars-Depth.png",
+          "glass": false,
+          "hidden": false
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.22
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.05
+      },
+      "refractivity": {
+        "enabled": true,
+        "strength": 0.1,
+        "depth": 0
+      }
+    },
+    {
+      "name": "02 Front Pillar",
+      "layers": [
+        {
+          "name": "Pillar Facet",
+          "image-name": "05-Pillar-Facet.png",
+          "glass": false,
+          "hidden": false
+        },
+        {
+          "name": "Pillar Face",
+          "image-name": "04-Pillar-Face.png",
+          "glass": false,
+          "hidden": false
+        },
+        {
+          "name": "Pillar Depth",
+          "image-name": "03-Pillar-Depth.png",
+          "glass": false,
+          "hidden": false
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.3
+      }
+    },
+    {
+      "name": "01 Play Wedge",
+      "layers": [
+        {
+          "name": "Play Face",
+          "image-name": "02-Play-Face.png",
+          "glass": false,
+          "hidden": false
+        },
+        {
+          "name": "Play Depth",
+          "image-name": "01-Play-Depth.png",
+          "glass": false,
+          "hidden": false
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.3
+      }
+    },
+    {
+      "name": "00 Appearance Background",
+      "layers": [
+        {
+          "name": "Integrated Gloss",
+          "glass": false,
+          "hidden": false,
+          "image-name-specializations": [
+            {
+              "value": "00-Default-Background.png"
+            },
+            {
+              "appearance": "dark",
+              "value": "00-Dark-Background.png"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "supported-platforms": {
+    "squares": "shared"
+  }
+}

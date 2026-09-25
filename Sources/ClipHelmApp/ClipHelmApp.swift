@@ -64,6 +64,7 @@ struct ClipHelmApp: App {
         Window("ClipHelm", id: "main") {
             AppShell(navigation: navigation)
                 .frame(minWidth: 780, minHeight: 560)
+                .tint(DS.accent)
         }
         .defaultSize(width: 1180, height: 760)
         .commands {

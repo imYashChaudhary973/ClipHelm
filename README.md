@@ -4,7 +4,7 @@ Native macOS clip editor in development. The app is not yet cleared for external
 
 ## Run
 
-Requires macOS 14+ and Xcode with Swift 6.
+Requires macOS 14+ to run. Building the app bundle needs Xcode 26 or later, whose `actool` compiles the Icon Composer app icon; `swift build` and `swift test` need only Swift 6.
 
 ```bash
 scripts/build-app.sh

@@ -500,349 +500,35 @@ struct WorkspacePlaybackView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            if controller.processing {
-                processingBanner
-            } else if let message = controller.message, project.clips.isEmpty {
-                Label(message, systemImage: "info.circle")
-                    .padding(12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
-            }
-            ZStack {
-                RoundedRectangle(cornerRadius: 8).fill(.black)
-                if let source {
-                    VideoPlayer(player: controller.engine.player)
-                    if let program = controller.captionProgram {
-                        CaptionPreviewView(program: program, engine: controller.engine,
-                                           asset: source.asset)
-                    }
-                } else {
-                    ContentUnavailableView("Source access needed", systemImage: "play.rectangle",
-                        description: Text("Locate the original video to play and seek in this project."))
-                        .foregroundStyle(.white)
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .aspectRatio(16 / 9, contentMode: .fit)
-
-            if source == nil && project.sourceKind == .local {
-                Button(reattaching ? "Locating…" : "Locate Original Video") {
-                    showingSourcePicker = true
-                }
-                .disabled(reattaching)
-            }
-            if source == nil && project.sourceKind == .directURL &&
-                !SourceImportPolicy.directURLImportEnabled {
-                Text(SourceIngestError.directURLDisabled.localizedDescription)
-                    .foregroundStyle(.secondary)
-            }
-            if source == nil && (project.sourceKind == .youtube ||
-                (project.sourceKind == .directURL && SourceImportPolicy.directURLImportEnabled)) {
-                TextField("Original video URL", text: $remoteLink)
-                    .textFieldStyle(.roundedBorder)
-                Toggle("I own this video or have permission to process it", isOn: $authorizedRemote)
-                Button(reattaching ? "Preparing…" : "Prepare Original Video") {
-                    reattaching = true
-                    reattachProgress = nil
-                    reattachTask = Task { @MainActor in
-                        do {
-                            try await reattachRemote(remoteLink, authorizedRemote) { update in
-                                Task { @MainActor in reattachProgress = update }
-                            }
-                        } catch is CancellationError {
-                            return
-                        }
-                        catch let error as SourceIngestError {
-                            controller.message = error.localizedDescription
-                        } catch {
-                            controller.message = "That video does not match this project. Check the link and try again."
-                        }
-                        reattaching = false
-                    }
-                }
-                .disabled(reattaching || !authorizedRemote || remoteLink.isEmpty)
-                if reattaching {
-                    HStack {
-                        if let fraction = reattachProgress?.fraction {
-                            ProgressView(value: fraction).frame(width: 180)
-                        } else { ProgressView().controlSize(.small) }
-                        Text(reattachProgress?.stage == .downloading ? "Downloading…" : "Checking source…")
-                            .foregroundStyle(.secondary)
-                        Button("Cancel") {
-                            reattachTask?.cancel()
-                            reattaching = false
-                        }
-                    }
-                }
-                Text("Re-enter the public source link after relaunch. ClipHelm does not store remote URLs.")
-                    .font(.callout).foregroundStyle(.secondary)
-            }
-
+        VStack(alignment: .leading, spacing: DS.Space.lg) {
+            // A quick YouTube import starts processing on arrival; keep its progress in view.
+            if controller.processing { processingBanner }
+            player
+            if source == nil { sourceAccessCard }
             if controller.preparingProxy {
-                HStack {
-                    if let fraction = controller.proxyFraction {
-                        ProgressView(value: fraction).frame(width: 180)
-                    } else { ProgressView().controlSize(.small) }
-                    Text("Preparing editing proxy").foregroundStyle(.secondary)
-                    Button("Cancel") { controller.cancelProxy() }
-                }
-            }
-
-            Divider()
-            HStack {
-                Text("Local analysis").font(.title3.weight(.semibold))
-                Spacer()
-                if let source, let analysisCacheDirectory, !controller.analyzing {
-                    Button(controller.analysis == nil ? "Analyze on This Mac" : "Analyze Again") {
-                        controller.analyze(source: source, cacheDirectory: analysisCacheDirectory)
-                    }
-                }
-            }
-            if controller.analyzing {
-                HStack {
-                    ProgressView(value: controller.analysisProgress?.fraction ?? 0)
-                        .frame(width: 180)
-                    Text(analysisStage).foregroundStyle(.secondary)
-                    Button("Cancel") { controller.cancelAnalysis() }
-                }
-            } else if let analysis = controller.analysis {
-                Text("\(analysis.scenes.count) scenes · \(analysis.subjectTracks.count) subject tracks · \(analysis.signals.filter { $0.kind == .pause }.count) possible pauses")
-                    .foregroundStyle(.secondary)
-                ForEach(Array(analysis.classifications.prefix(6).enumerated()), id: \.offset) { _, item in
-                    HStack {
-                        Text(Self.timeLabel(item.range.start)).monospacedDigit()
-                            .foregroundStyle(.secondary).frame(width: 52, alignment: .leading)
-                        Text(item.kind.label)
-                        Text("· \(item.confidence < 0.45 ? "low" : "moderate") confidence")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                if analysis.classifications.count > 6 {
-                    Text("\(analysis.classifications.count - 6) more analyzed intervals")
-                        .foregroundStyle(.secondary)
-                }
-                Text("Labels are local estimates. Review uncertain shots before editing.")
-                    .font(.callout).foregroundStyle(.secondary)
-            } else {
-                Text("Detect scenes, motion, subjects, audio activity, and possible content types locally.")
-                    .foregroundStyle(.secondary)
-            }
-
-            Divider()
-
-            HStack {
-                Text("Transcript").font(.title3.weight(.semibold))
-                Spacer()
-                if source != nil && !controller.transcribing {
-                    Picker("Method", selection: $useOpenRouter) {
-                        Text("On this Mac").tag(false)
-                        Text("OpenRouter").tag(true)
-                    }
-                    .frame(width: 190)
-                    if useOpenRouter {
-                        Button("Load Models") { controller.loadModels() }
-                            .disabled(controller.loadingModels)
-                    }
-                }
-            }
-            if useOpenRouter && source != nil && !controller.models.isEmpty && !controller.transcribing {
-                Picker("Model", selection: $controller.selectedModelID) {
-                    ForEach(controller.models) { model in
-                        Text(model.name).tag(model.id)
-                    }
-                }
-                Text("OpenRouter transcription sends short audio excerpts and uses API credits.")
-                    .font(.callout).foregroundStyle(.secondary)
-            }
-            if let source {
-                if controller.transcribing {
-                    HStack {
-                        if let fraction = controller.transcriptProgress?.fraction {
-                            ProgressView(value: fraction).frame(width: 180)
-                        } else { ProgressView().controlSize(.small) }
-                        Text("Transcribing…").foregroundStyle(.secondary)
-                        Button("Cancel") { controller.cancelTranscription() }
-                    }
-                } else {
-                    Button(useOpenRouter ? "Transcribe with OpenRouter (uses credits)" : "Transcribe on This Mac") {
-                        controller.transcribe(source: source, configuration: project.configuration,
-                                              useOpenRouter: useOpenRouter,
-                                              save: saveTranscript)
-                    }
-                    .disabled(useOpenRouter && controller.selectedModelID.isEmpty)
-                }
+                TaskProgressRow(label: "Preparing editing proxy", fraction: controller.proxyFraction,
+                                onCancel: { controller.cancelProxy() })
+                    .surfaceCard()
             }
             if let message = controller.message {
-                Text(message).font(.callout).foregroundStyle(.secondary)
-            }
-            if let transcript = controller.transcript {
-                if transcript.segments.isEmpty {
-                    Text("No speech found in this video.").foregroundStyle(.secondary)
-                } else {
-                    TextField("Search transcript", text: $search)
-                        .textFieldStyle(.roundedBorder)
-                        .accessibilityLabel("Search transcript")
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 0) {
-                            ForEach(Array(matchingSegments.enumerated()), id: \.offset) { _, segment in
-                                Button { controller.seek(to: segment.range.start) } label: {
-                                    HStack(alignment: .top, spacing: 12) {
-                                        Text(Self.timeLabel(segment.range.start))
-                                            .monospacedDigit().foregroundStyle(.secondary)
-                                            .frame(width: 52, alignment: .leading)
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            if let speaker = segment.speakerID {
-                                                Text(speaker).font(.caption).foregroundStyle(.secondary)
-                                            }
-                                            Text(segment.text).frame(maxWidth: .infinity, alignment: .leading)
-                                        }
-                                    }
-                                    .padding(.vertical, 7)
-                                    .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-                                .disabled(source == nil)
-                                Divider()
-                            }
-                        }
-                    }
-                    .frame(height: 210)
-                }
-            } else {
-                Text("Transcribe to search speech and jump to a moment.")
-                    .foregroundStyle(.secondary)
+                StatusMessage(text: message, tone: .warning)
+                    .surfaceCard(padding: DS.Space.sm)
             }
 
-            Divider()
-            HStack {
-                Text("Best moments").font(.title3.weight(.semibold))
-                Spacer()
-                if controller.transcript?.hasMeaningfulSpeech == true {
-                    Button(controller.loadingMomentModels ? "Loading…" : "Load Models") {
-                        controller.loadMomentModels()
-                    }
-                    .disabled(controller.loadingMomentModels || controller.discoveringMoments)
-                }
-            }
-            if controller.transcript?.hasMeaningfulSpeech == true {
-                if !controller.momentModels.isEmpty {
-                    Picker("Discovery model", selection: $controller.selectedMomentModelID) {
-                        ForEach(controller.momentModels) { model in
-                            Text(model.name).tag(model.id)
-                        }
-                    }
-                    Text("Sends only selected transcript excerpts and metadata to OpenRouter. Uses API credits.")
-                        .font(.callout).foregroundStyle(.secondary)
-                } else {
-                    Text("Load a structured text model to evaluate spoken moments.")
-                        .foregroundStyle(.secondary)
-                }
-            } else {
-                Text("Without a transcript, discovery uses local visual activity and needs manual review.")
+            processCard
+
+            VStack(alignment: .leading, spacing: DS.Space.xxs) {
+                Text("Explore the source").font(.title2.weight(.semibold))
+                    .accessibilityAddTraits(.isHeader)
+                Text("Optional. Inspect local analysis, speech, and candidate moments before or after processing.")
                     .foregroundStyle(.secondary)
             }
-            if controller.discoveringMoments {
-                HStack {
-                    ProgressView(value: Double(controller.momentProgress?.completed ?? 0),
-                                 total: Double(max(1, controller.momentProgress?.total ?? 1)))
-                        .frame(width: 180)
-                    Text("Evaluating moments…").foregroundStyle(.secondary)
-                    Button("Cancel") { controller.cancelMoments() }
-                }
-            } else if let source, controller.analysis != nil {
-                Button("Find Best Moments") {
-                    controller.discoverMoments(source: source, lengths: project.selectedLengths)
-                }
-                .disabled(controller.transcript?.hasMeaningfulSpeech == true &&
-                          controller.selectedMomentModelID.isEmpty)
-            } else {
-                Text("Run local analysis to find candidate windows.").foregroundStyle(.secondary)
-            }
-            if let result = controller.moments {
-                if let explanation = result.explanation {
-                    Text(explanation).font(.callout).foregroundStyle(.secondary)
-                }
-                ForEach(result.moments, id: \.candidate.id) { moment in
-                    Button { controller.seek(to: moment.proposal.range.start) } label: {
-                        HStack(alignment: .firstTextBaseline) {
-                            Text(Self.timeLabel(moment.proposal.range.start)).monospacedDigit()
-                                .frame(width: 52, alignment: .leading)
-                            VStack(alignment: .leading) {
-                                Text(moment.proposal.title).fontWeight(.medium)
-                                Text(moment.proposal.rationale).font(.callout).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Text("\(Int(moment.quality * 100))")
-                                .monospacedDigit().foregroundStyle(.secondary)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-
-            Divider()
-            HStack {
-                Text("Process clips").font(.title3.weight(.semibold))
-                Spacer()
-                if source?.hasAudio == true || project.configuration.smartEdit.useVisionForTrickyShots {
-                    Button(controller.loadingMomentModels ? "Loading…" : "Load Models") {
-                        controller.loadMomentModels()
-                    }
-                    .disabled(controller.loadingMomentModels || controller.processing)
-                }
-            }
-            if let source, let analysisCacheDirectory, let exportsDirectory {
-                let needsModel = project.transcript?.hasMeaningfulSpeech ?? source.hasAudio
-                if needsModel {
-                    if !controller.momentModels.isEmpty {
-                        Picker("Moment model", selection: $controller.selectedMomentModelID) {
-                            ForEach(controller.momentModels) { model in Text(model.name).tag(model.id) }
-                        }
-                    } else {
-                        Text("Load a structured text model for spoken moments.")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                if project.configuration.smartEdit.useVisionForTrickyShots {
-                    if !controller.visionModels.isEmpty {
-                        Picker("Vision model", selection: $controller.selectedVisionModelID) {
-                            ForEach(controller.visionModels) { model in Text(model.name).tag(model.id) }
-                        }
-                    } else {
-                        Text("Load a structured vision model for uncertain shots.")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                if controller.processing {
-                    HStack {
-                        ProgressView(value: controller.processingProgress?.fraction ?? 0)
-                            .frame(width: 180)
-                        Text(controller.processingProgress?.stage.rawValue ?? "Preparing")
-                            .foregroundStyle(.secondary)
-                        Button("Cancel") { controller.cancelProcessing() }
-                    }
-                    if let detail = controller.processingProgress?.detail {
-                        Text(detail).font(.callout).foregroundStyle(.secondary)
-                    }
-                } else {
-                    Button("Process Clips") {
-                        controller.process(project: project, source: source, ingestor: ingestor,
-                            cacheDirectory: analysisCacheDirectory, outputDirectory: exportsDirectory,
-                            save: saveProcessingResult)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled((needsModel && controller.selectedMomentModelID.isEmpty) ||
-                              (project.configuration.smartEdit.useVisionForTrickyShots &&
-                               controller.selectedVisionModelID.isEmpty))
-                    Text("Processing uses on-device speech recognition and local analysis. OpenRouter evaluates selected transcript windows and, if enabled, uncertain shots. It uses API credits.")
-                        .font(.callout).foregroundStyle(.secondary)
-                }
-            } else {
-                Text("Locate the original video to process clips.").foregroundStyle(.secondary)
-            }
+            .padding(.top, DS.Space.xs)
+            analysisCard
+            transcriptCard
+            momentsCard
         }
-        .frame(maxWidth: 1000, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .task(id: source?.fileURL) {
             controller.start(project: project, source: source)
             if autoProcess, let source, let analysisCacheDirectory, let exportsDirectory {
@@ -865,6 +551,424 @@ struct WorkspacePlaybackView: View {
         }
     }
 
+    // MARK: Player and source access
+
+    private var isVerticalSource: Bool {
+        guard let asset = source?.asset ?? project.mediaAsset else { return false }
+        return asset.height > asset.width
+    }
+
+    /// Without a source there is nothing to watch; the source access card explains why.
+    @ViewBuilder
+    private var player: some View {
+        if let source {
+            let stage = ZStack {
+                DS.videoBackground
+                VideoPlayer(player: controller.engine.player)
+                if let program = controller.captionProgram {
+                    CaptionPreviewView(program: program, engine: controller.engine,
+                                       asset: source.asset)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: DS.Radius.large, style: .continuous))
+
+            // Tall sources get a fixed stage so they are not shrunk into a wide letterbox.
+            if isVerticalSource {
+                stage.frame(maxWidth: .infinity).frame(height: 480)
+            } else {
+                stage.frame(maxWidth: .infinity).aspectRatio(16 / 9, contentMode: .fit)
+            }
+        }
+    }
+
+    private var sourceAccessCard: some View {
+        VStack(alignment: .leading, spacing: DS.Space.sm) {
+            HStack(alignment: .top, spacing: DS.Space.sm) {
+                Image(systemName: "play.rectangle")
+                    .font(.title)
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Source access needed").font(.headline)
+                        .accessibilityAddTraits(.isHeader)
+                    Text("Locate the original video to play, analyze, and process this project.")
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            if project.sourceKind == .local {
+                Button(reattaching ? "Locating…" : "Locate Original Video…") {
+                    showingSourcePicker = true
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(reattaching)
+            }
+            if project.sourceKind == .directURL && !SourceImportPolicy.directURLImportEnabled {
+                Text(SourceIngestError.directURLDisabled.localizedDescription)
+                    .foregroundStyle(.secondary)
+            }
+            if project.sourceKind == .youtube ||
+                (project.sourceKind == .directURL && SourceImportPolicy.directURLImportEnabled) {
+                TextField("Original video URL", text: $remoteLink)
+                    .textFieldStyle(.roundedBorder)
+                Toggle("I own this video or have permission to process it", isOn: $authorizedRemote)
+                Button(reattaching ? "Preparing…" : "Prepare Original Video") {
+                    reattaching = true
+                    reattachProgress = nil
+                    reattachTask = Task { @MainActor in
+                        do {
+                            try await reattachRemote(remoteLink, authorizedRemote) { update in
+                                Task { @MainActor in reattachProgress = update }
+                            }
+                        } catch is CancellationError {
+                            return
+                        }
+                        catch let error as SourceIngestError {
+                            controller.message = error.localizedDescription
+                        } catch {
+                            controller.message = "That video does not match this project. Check the link and try again."
+                        }
+                        reattaching = false
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(reattaching || !authorizedRemote || remoteLink.isEmpty)
+                if reattaching {
+                    TaskProgressRow(label: reattachProgress?.stage == .downloading ? "Downloading…" : "Checking source…",
+                                    fraction: reattachProgress?.fraction) {
+                        reattachTask?.cancel()
+                        reattaching = false
+                    }
+                }
+                Text("Re-enter the public source link after relaunch. ClipHelm does not store remote URLs.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+        }
+        .surfaceCard(highlighted: true)
+    }
+
+    // MARK: Process (primary)
+
+    private var processStatus: (text: String, tone: StatusTone) {
+        if controller.processing { return ("Running", .info) }
+        if source == nil { return ("Needs source", .warning) }
+        if !project.clips.isEmpty { return ("\(project.clips.count) clips saved", .success) }
+        return ("Ready", .neutral)
+    }
+
+    private var processCard: some View {
+        StageCard(eyebrow: "Recommended", title: "Process clips", systemImage: "scissors",
+                  status: processStatus, highlighted: source != nil && !controller.processing) {
+            if source?.hasAudio == true || project.configuration.smartEdit.useVisionForTrickyShots {
+                Button(controller.loadingMomentModels ? "Loading…" : "Load Models") {
+                    controller.loadMomentModels()
+                }
+                .disabled(controller.loadingMomentModels || controller.processing)
+            }
+        } content: {
+            Text("Finds the strongest moments, frames them, and renders preview and final files.")
+                .foregroundStyle(.secondary)
+            if let source, let analysisCacheDirectory, let exportsDirectory {
+                let needsModel = project.transcript?.hasMeaningfulSpeech ?? source.hasAudio
+                if needsModel {
+                    if !controller.momentModels.isEmpty {
+                        Picker("Moment model", selection: $controller.selectedMomentModelID) {
+                            ForEach(controller.momentModels) { model in Text(model.name).tag(model.id) }
+                        }
+                    } else {
+                        StatusMessage(text: "Load a structured text model for spoken moments.", tone: .neutral)
+                    }
+                }
+                if project.configuration.smartEdit.useVisionForTrickyShots {
+                    if !controller.visionModels.isEmpty {
+                        Picker("Vision model", selection: $controller.selectedVisionModelID) {
+                            ForEach(controller.visionModels) { model in Text(model.name).tag(model.id) }
+                        }
+                    } else {
+                        StatusMessage(text: "Load a structured vision model for uncertain shots.", tone: .neutral)
+                    }
+                }
+                if controller.processing {
+                    // The banner at the top of the workspace carries progress and Cancel.
+                    StatusMessage(text: "Making clips. Progress is shown at the top of this page.", tone: .info)
+                } else {
+                    HStack(spacing: DS.Space.sm) {
+                        Button {
+                            controller.process(project: project, source: source, ingestor: ingestor,
+                                cacheDirectory: analysisCacheDirectory, outputDirectory: exportsDirectory,
+                                save: saveProcessingResult)
+                        } label: {
+                            Label("Process Clips",
+                                  systemImage: "wand.and.stars")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                        .disabled((needsModel && controller.selectedMomentModelID.isEmpty) ||
+                                  (project.configuration.smartEdit.useVisionForTrickyShots &&
+                                   controller.selectedVisionModelID.isEmpty))
+                        if needsModel && controller.selectedMomentModelID.isEmpty {
+                            Text("Load models to enable processing.")
+                                .font(.callout).foregroundStyle(.secondary)
+                        }
+                    }
+                    StatusMessage(text: "Processing uses on-device speech recognition and local analysis. OpenRouter evaluates selected transcript windows and, if enabled, uncertain shots. It uses API credits.",
+                                  tone: .info)
+                }
+            } else {
+                StatusMessage(text: "Locate the original video to process clips.", tone: .neutral)
+            }
+        }
+    }
+
+    // MARK: Explore
+
+    private var analysisStatus: (text: String, tone: StatusTone) {
+        if controller.analyzing { return ("Running", .info) }
+        if controller.analysis != nil { return ("Done", .success) }
+        return ("Not started", .neutral)
+    }
+
+    private var analysisCard: some View {
+        StageCard(title: "Local analysis", systemImage: "waveform.path.ecg", status: analysisStatus) {
+            if let source, let analysisCacheDirectory, !controller.analyzing {
+                Button(controller.analysis == nil ? "Analyze on This Mac" : "Analyze Again") {
+                    controller.analyze(source: source, cacheDirectory: analysisCacheDirectory)
+                }
+            }
+        } content: {
+            if controller.analyzing {
+                TaskProgressRow(label: analysisStage, fraction: controller.analysisProgress?.fraction ?? 0) {
+                    controller.cancelAnalysis()
+                }
+            } else if let analysis = controller.analysis {
+                HStack(spacing: DS.Space.lg) {
+                    metric("\(analysis.scenes.count)", "scenes")
+                    metric("\(analysis.subjectTracks.count)", "subject tracks")
+                    metric("\(analysis.signals.filter { $0.kind == .pause }.count)", "possible pauses")
+                }
+                VStack(spacing: 0) {
+                    ForEach(Array(analysis.classifications.prefix(6).enumerated()), id: \.offset) { index, item in
+                        if index > 0 { Divider() }
+                        HStack {
+                            Text(Self.timeLabel(item.range.start)).monospacedDigit()
+                                .foregroundStyle(.secondary).frame(width: 52, alignment: .leading)
+                            Text(item.kind.label)
+                            Spacer()
+                            Text("\(item.confidence < 0.45 ? "Low" : "Moderate") confidence")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, DS.Space.xs)
+                    }
+                }
+                if analysis.classifications.count > 6 {
+                    Text("\(analysis.classifications.count - 6) more analyzed intervals")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+                StatusMessage(text: "Labels are local estimates. Review uncertain shots before editing.", tone: .neutral)
+            } else {
+                Text("Detect scenes, motion, subjects, audio activity, and possible content types locally.")
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func metric(_ value: String, _ label: String) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(value).font(.title2.weight(.semibold)).monospacedDigit()
+            Text(label).font(.callout).foregroundStyle(.secondary)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var transcriptStatus: (text: String, tone: StatusTone) {
+        if controller.transcribing { return ("Running", .info) }
+        if let transcript = controller.transcript {
+            return transcript.segments.isEmpty ? ("No speech", .warning) : ("Done", .success)
+        }
+        return ("Not started", .neutral)
+    }
+
+    private var transcriptCard: some View {
+        StageCard(title: "Transcript", systemImage: "text.quote", status: transcriptStatus) {
+            if source != nil && !controller.transcribing {
+                Picker("Method", selection: $useOpenRouter) {
+                    Text("On this Mac").tag(false)
+                    Text("OpenRouter").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+            }
+        } content: {
+            if useOpenRouter && source != nil && !controller.transcribing {
+                HStack {
+                    if !controller.models.isEmpty {
+                        Picker("Model", selection: $controller.selectedModelID) {
+                            ForEach(controller.models) { model in
+                                Text(model.name).tag(model.id)
+                            }
+                        }
+                    }
+                    Button(controller.loadingModels ? "Loading…" : "Load Models") { controller.loadModels() }
+                        .disabled(controller.loadingModels)
+                }
+                StatusMessage(text: "OpenRouter transcription sends short audio excerpts and uses API credits.",
+                              tone: .info)
+            }
+            if let source {
+                if controller.transcribing {
+                    TaskProgressRow(label: "Transcribing…", fraction: controller.transcriptProgress?.fraction) {
+                        controller.cancelTranscription()
+                    }
+                } else {
+                    Button(useOpenRouter ? "Transcribe with OpenRouter (uses credits)" : "Transcribe on This Mac") {
+                        controller.transcribe(source: source, configuration: project.configuration,
+                                              useOpenRouter: useOpenRouter,
+                                              save: saveTranscript)
+                    }
+                    .disabled(useOpenRouter && controller.selectedModelID.isEmpty)
+                }
+            }
+            if let transcript = controller.transcript {
+                if transcript.segments.isEmpty {
+                    Text("No speech found in this video.").foregroundStyle(.secondary)
+                } else {
+                    TextField("Search transcript", text: $search)
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("Search transcript")
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(Array(matchingSegments.enumerated()), id: \.offset) { _, segment in
+                                Button { controller.seek(to: segment.range.start) } label: {
+                                    HStack(alignment: .top, spacing: DS.Space.sm) {
+                                        Text(Self.timeLabel(segment.range.start))
+                                            .monospacedDigit().foregroundStyle(.secondary)
+                                            .frame(width: 52, alignment: .leading)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            if let speaker = segment.speakerID {
+                                                Text(speaker).font(.caption).foregroundStyle(.secondary)
+                                            }
+                                            Text(segment.text).frame(maxWidth: .infinity, alignment: .leading)
+                                        }
+                                    }
+                                    .padding(.vertical, DS.Space.xs)
+                                    .padding(.horizontal, DS.Space.xs)
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(source == nil)
+                                .help("Jump to \(Self.timeLabel(segment.range.start))")
+                                Divider()
+                            }
+                            if matchingSegments.isEmpty {
+                                Text("No lines match “\(search)”.")
+                                    .foregroundStyle(.secondary)
+                                    .padding(DS.Space.sm)
+                            }
+                        }
+                    }
+                    .frame(height: 240)
+                    .background(Color(nsColor: .textBackgroundColor),
+                                in: RoundedRectangle(cornerRadius: DS.Radius.medium, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: DS.Radius.medium, style: .continuous)
+                            .strokeBorder(DS.hairline)
+                    }
+                }
+            } else {
+                Text("Transcribe to search speech and jump to a moment.")
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var momentsStatus: (text: String, tone: StatusTone) {
+        if controller.discoveringMoments { return ("Running", .info) }
+        if let result = controller.moments {
+            return result.moments.isEmpty ? ("None found", .warning) : ("\(result.moments.count) found", .success)
+        }
+        return ("Not started", .neutral)
+    }
+
+    private var momentsCard: some View {
+        StageCard(title: "Best moments", systemImage: "sparkles", status: momentsStatus) {
+            if controller.transcript?.hasMeaningfulSpeech == true {
+                Button(controller.loadingMomentModels ? "Loading…" : "Load Models") {
+                    controller.loadMomentModels()
+                }
+                .disabled(controller.loadingMomentModels || controller.discoveringMoments)
+            }
+        } content: {
+            if controller.transcript?.hasMeaningfulSpeech == true {
+                if !controller.momentModels.isEmpty {
+                    Picker("Discovery model", selection: $controller.selectedMomentModelID) {
+                        ForEach(controller.momentModels) { model in
+                            Text(model.name).tag(model.id)
+                        }
+                    }
+                    StatusMessage(text: "Sends only selected transcript excerpts and metadata to OpenRouter. Uses API credits.",
+                                  tone: .info)
+                } else {
+                    Text("Load a structured text model to evaluate spoken moments.")
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                Text("Without a transcript, discovery uses local visual activity and needs manual review.")
+                    .foregroundStyle(.secondary)
+            }
+            if controller.discoveringMoments {
+                TaskProgressRow(label: "Evaluating moments…",
+                                fraction: Double(controller.momentProgress?.completed ?? 0) /
+                                    Double(max(1, controller.momentProgress?.total ?? 1))) {
+                    controller.cancelMoments()
+                }
+            } else if let source, controller.analysis != nil {
+                Button("Find Best Moments") {
+                    controller.discoverMoments(source: source, lengths: project.selectedLengths)
+                }
+                .disabled(controller.transcript?.hasMeaningfulSpeech == true &&
+                          controller.selectedMomentModelID.isEmpty)
+            } else {
+                StatusMessage(text: "Run local analysis to find candidate windows.", tone: .neutral)
+            }
+            if let result = controller.moments {
+                if let explanation = result.explanation {
+                    StatusMessage(text: explanation, tone: .info)
+                }
+                VStack(spacing: 0) {
+                    ForEach(Array(result.moments.enumerated()), id: \.element.candidate.id) { index, moment in
+                        if index > 0 { Divider() }
+                        Button { controller.seek(to: moment.proposal.range.start) } label: {
+                            HStack(alignment: .firstTextBaseline, spacing: DS.Space.sm) {
+                                Text(Self.timeLabel(moment.proposal.range.start)).monospacedDigit()
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 52, alignment: .leading)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(moment.proposal.title).fontWeight(.medium)
+                                    Text(moment.proposal.rationale).font(.callout).foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                                Spacer()
+                                Text("\(Int(moment.quality * 100))")
+                                    .font(.callout.weight(.semibold))
+                                    .monospacedDigit()
+                                    .padding(.horizontal, DS.Space.xs)
+                                    .padding(.vertical, 2)
+                                    .background(DS.accent.opacity(0.12), in: Capsule())
+                                    .accessibilityLabel("Quality \(Int(moment.quality * 100)) of 100")
+                            }
+                            .padding(.vertical, DS.Space.xs)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .help("Jump to this moment")
+                    }
+                }
+            }
+        }
+    }
+
     private static func timeLabel(_ time: MediaTime) -> String {
         let seconds = time.microseconds / 1_000_000
         return "\(seconds / 60):\(String(format: "%02d", seconds % 60))"
@@ -874,22 +978,25 @@ struct WorkspacePlaybackView: View {
         let stages = ProcessingStage.allCases.filter { $0 != .complete }
         let current = controller.processingProgress?.stage ?? .preparing
         let index = stages.firstIndex(of: current) ?? 0
-        return VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Making clips · step \(index + 1) of \(stages.count): \(current.rawValue)")
-                    .font(.headline)
+        return VStack(alignment: .leading, spacing: DS.Space.sm) {
+            HStack(spacing: DS.Space.sm) {
+                ProgressView().controlSize(.small)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Making clips").font(.headline)
+                    Text("Step \(index + 1) of \(stages.count) · \(current.rawValue)")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
                 Spacer()
                 Button("Cancel") { controller.cancelProcessing() }
             }
             ProgressView(value: (Double(index) + (controller.processingProgress?.fraction ?? 0)) / Double(stages.count))
+                .accessibilityLabel("Making clips")
             if let detail = controller.processingProgress?.detail {
                 Text(detail).font(.callout).foregroundStyle(.secondary)
             }
-            Text("Your clips appear here when rendering finishes.")
-                .font(.callout).foregroundStyle(.secondary)
+            StatusMessage(text: "Your clips appear here when rendering finishes.", tone: .info)
         }
-        .padding(14)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+        .surfaceCard(highlighted: true)
     }
 
     private var analysisStage: String {

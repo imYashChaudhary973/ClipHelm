@@ -114,8 +114,14 @@ struct QuickClipView: View {
     @StateObject private var model = QuickClipModel()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Clip a YouTube video").font(.title2.weight(.semibold))
+        VStack(alignment: .leading, spacing: DS.Space.sm) {
+            Label {
+                Text("Clip a YouTube video").font(.title2.weight(.semibold))
+            } icon: {
+                Image(systemName: "play.rectangle.fill")
+                    .foregroundStyle(DS.brandGradient)
+            }
+            .accessibilityAddTraits(.isHeader)
             if !model.hasKey {
                 Text("Step 1 · Paste your OpenRouter API key. It is stored only in macOS Keychain.")
                     .foregroundStyle(.secondary)
@@ -134,26 +140,27 @@ struct QuickClipView: View {
                 .disabled(model.busy || !model.hasKey)
             Toggle("I own this video or have permission to process it", isOn: $model.authorized)
                 .disabled(model.busy || !model.hasKey)
-            HStack(spacing: 12) {
-                Button("Make Clips") { model.start(ingestor: ingestor, onReady: onReady) }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    .disabled(model.busy || !model.hasKey || !model.authorized || model.link.isEmpty)
+            HStack(spacing: DS.Space.sm) {
+                Button {
+                    model.start(ingestor: ingestor, onReady: onReady)
+                } label: {
+                    Label("Make Clips", systemImage: "wand.and.stars")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(model.busy || !model.hasKey || !model.authorized || model.link.isEmpty)
                 if model.busy {
                     progress
                     if model.stage != .savingKey { Button("Cancel") { model.cancel() } }
                 }
             }
             if let message = model.message {
-                Text(message).font(.callout).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                StatusMessage(text: message, tone: .info)
             }
-            Text("Uses your saved clip settings (change them with New Clip Project). The first import installs the free yt-dlp downloader from its official GitHub release. Finding moments sends transcript excerpts to OpenRouter and uses API credits.")
-                .font(.callout).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            StatusMessage(text: "Uses your saved clip settings (change them with New Clip Project). The first import installs the free yt-dlp downloader from its official GitHub release. Finding moments sends transcript excerpts to OpenRouter and uses API credits.",
+                          tone: .neutral)
         }
-        .padding(20)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+        .surfaceCard(padding: DS.Space.lg, highlighted: true)
         .task { await model.refresh() }
     }
 
@@ -169,11 +176,7 @@ struct QuickClipView: View {
     }
 
     private func label(_ text: String, fraction: Double?) -> some View {
-        HStack(spacing: 8) {
-            if let fraction { ProgressView(value: fraction).frame(width: 140) }
-            else { ProgressView().controlSize(.small) }
-            Text(text).foregroundStyle(.secondary)
-        }
+        TaskProgressRow(label: text, fraction: fraction)
     }
 }
 
@@ -208,24 +211,25 @@ struct YouTubeToolSettingsView: View {
     @StateObject private var model = YouTubeToolSettingsModel()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("YouTube Downloader").font(.title2.weight(.semibold))
-            if let status = model.status {
-                Label("yt-dlp \(status.version ?? "") · \(status.origin == .managed ? "installed by ClipHelm" : "installed on this Mac")",
-                      systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-            } else if !model.busy {
-                Text("Not installed").foregroundStyle(.secondary)
-            }
-            HStack {
+        // The Settings group supplies the "YouTube Downloader" heading.
+        VStack(alignment: .leading, spacing: DS.Space.sm) {
+            HStack(spacing: DS.Space.sm) {
+                if let status = model.status {
+                    StatusBadge(text: "yt-dlp \(status.version ?? "")", tone: .success)
+                    Text(status.origin == .managed ? "Installed by ClipHelm" : "Installed on this Mac")
+                        .font(.callout).foregroundStyle(.secondary)
+                } else if !model.busy {
+                    StatusBadge(text: "Not installed", tone: .neutral)
+                }
+                if model.busy { ProgressView().controlSize(.small) }
+                Spacer()
                 Button(model.status?.origin == .managed ? "Update" : "Install") {
                     Task { await model.install() }
                 }
                 .disabled(model.busy)
-                if model.busy { ProgressView().controlSize(.small) }
             }
             if let message = model.message {
-                Text(message).font(.callout).foregroundStyle(.secondary)
+                StatusMessage(text: message, tone: .info)
             }
             Text("ClipHelm downloads the official yt-dlp release from GitHub, checks it against the published SHA-256 checksum, and keeps it in Application Support. Update it if YouTube imports start failing.")
                 .font(.callout).foregroundStyle(.secondary)

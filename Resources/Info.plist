@@ -5,6 +5,8 @@
     <key>CFBundleDevelopmentRegion</key><string>en</string>
     <key>CFBundleDisplayName</key><string>ClipHelm</string>
     <key>CFBundleExecutable</key><string>ClipHelmApp</string>
+    <key>CFBundleIconFile</key><string>ClipHelm</string>
+    <key>CFBundleIconName</key><string>ClipHelm</string>
     <key>CFBundleIdentifier</key><string>com.cliphelm.app</string>
     <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
     <key>CFBundleName</key><string>ClipHelm</string>
