@@ -1,10 +1,30 @@
 import XCTest
 import AVFoundation
+import Darwin
 import ClipHelmCore
 import ClipHelmMedia
 @testable import ClipHelmRendering
 
 final class RendererTests: XCTestCase {
+    private func renderProfiled(_ label: String, spec: ClipHelmEditSpec,
+                                source: URL, asset: MediaAsset, output: URL) async throws {
+        var before = rusage()
+        var after = rusage()
+        getrusage(RUSAGE_SELF, &before)
+        let started = Date()
+        _ = try await ClipRenderer().render(spec, sourceURL: source, asset: asset, outputURL: output)
+        getrusage(RUSAGE_SELF, &after)
+        if ProcessInfo.processInfo.environment["CLIPHELM_RUN_RENDER_BENCHMARKS"] == "1" {
+            let cpu = Double(after.ru_utime.tv_sec - before.ru_utime.tv_sec) +
+                Double(after.ru_utime.tv_usec - before.ru_utime.tv_usec) / 1_000_000 +
+                Double(after.ru_stime.tv_sec - before.ru_stime.tv_sec) +
+                Double(after.ru_stime.tv_usec - before.ru_stime.tv_usec) / 1_000_000
+            print(String(format: "CLIPHELM_RENDER_BENCHMARK size=%@ source_seconds=%.1f wall=%.3f cpu=%.3f peak_rss_bytes=%lld",
+                label, Double(asset.duration.microseconds) / 1_000_000,
+                Date().timeIntervalSince(started), cpu, after.ru_maxrss))
+        }
+    }
+
     func testRenderErrorHasRecoveryMessage() {
         XCTAssertNotNil(RenderError.outputUnavailable.errorDescription)
     }
@@ -21,7 +41,7 @@ final class RendererTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory.appending(path: "ClipHelm-render-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
         let output = directory.appending(path: "clip.mp4")
-        _ = try await ClipRenderer().render(spec, sourceURL: source, asset: asset, outputURL: output)
+        try await renderProfiled("1080x1920", spec: spec, source: source, asset: asset, output: output)
         let rendered = AVURLAsset(url: output)
         let tracks = try await rendered.loadTracks(withMediaType: .video)
         XCTAssertEqual(tracks.count, 1)
@@ -64,13 +84,40 @@ final class RendererTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory.appending(path: "ClipHelm-4k-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
         let output = directory.appending(path: "clip.mp4")
-        _ = try await ClipRenderer().render(spec, sourceURL: source, asset: asset, outputURL: output)
+        try await renderProfiled("3840x2160", spec: spec, source: source, asset: asset, output: output)
         let rendered = try await MediaProbe().probe(fileURL: output, displayName: "4K output").asset
         XCTAssertEqual(rendered.width, 3840)
         XCTAssertEqual(rendered.height, 2160)
         let video = try await AVURLAsset(url: output).loadTracks(withMediaType: .video)
         let formats = try await video[0].load(.formatDescriptions)
         XCTAssertEqual(formats.first.map(CMFormatDescriptionGetMediaSubType), kCMVideoCodecType_H264)
+    }
+
+    func testCancelledRenderLeavesNoTemporaryMedia() async throws {
+        let source = try XCTUnwrap(Bundle.module.url(forResource: "landscape4k", withExtension: "mp4"))
+        let asset = try await MediaProbe().probe(fileURL: source, displayName: "4K").asset
+        let range = try MediaTimeRange(start: MediaTime(microseconds: 0), end: asset.duration)
+        let spec = try ClipHelmEditSpec(clipID: ClipID(), sourceAssetID: asset.id,
+            segments: [EditSegment(sourceRange: range)],
+            outputFormat: try OutputFormat(width: 3840, height: 2160),
+            framingMode: .fullFrame, pacingMode: .balanced,
+            soundMode: .mute, captionStyle: nil)
+        let directory = FileManager.default.temporaryDirectory.appending(path: "ClipHelm-cancel-render-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let job = Task {
+            try await ClipRenderer().render(spec, sourceURL: source, asset: asset,
+                outputURL: directory.appending(path: "clip.mp4"))
+        }
+        try await Task.sleep(for: .milliseconds(30))
+        job.cancel()
+        do {
+            _ = try await job.value
+            XCTFail("Canceled render must not return an output")
+        } catch is CancellationError { }
+        if FileManager.default.fileExists(atPath: directory.path) {
+            let remaining = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+            XCTAssertTrue(remaining.isEmpty, "Canceled render left: \(remaining)")
+        }
     }
 
     func testCropUsesTopLeftNormalizedCoordinates() async throws {

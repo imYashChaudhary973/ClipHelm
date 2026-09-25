@@ -70,6 +70,7 @@ public struct MomentEngine: Sendable {
                 let prompt = LocalMomentDiscovery.prompt(for: candidate, asset: asset,
                     transcript: transcript!, analysis: analysis)
                 let bytes = try await gateway.completeClipProposal(prompt: prompt, modelID: modelID!)
+                try Task.checkCancellation()
                 guard let decoded = LocalMomentDiscovery.decodeProposal(bytes),
                       decoded.id == candidate.id, decoded.assetID == asset.id,
                       decoded.range == candidate.range, decoded.score != nil,

@@ -24,6 +24,15 @@ private actor RecordingBackend: TranscriptionBackend {
     }
 }
 
+private struct CancellingBackend: TranscriptionBackend {
+    let maximumChunkSeconds = 3
+    func transcribe(audioURL: URL) async throws -> [TranscriptWord] {
+        withUnsafeCurrentTask { $0?.cancel() }
+        return [try TranscriptWord(text: "Late", range: MediaTimeRange(
+            start: MediaTime(microseconds: 100_000), end: MediaTime(microseconds: 300_000)))]
+    }
+}
+
 final class TranscriptEngineTests: XCTestCase {
     private func fixture(_ name: String) throws -> URL {
         try XCTUnwrap(Bundle.module.url(forResource: name, withExtension: "mp4"))
@@ -68,6 +77,19 @@ final class TranscriptEngineTests: XCTestCase {
         } catch let error as TranscriptEngineError {
             XCTAssertEqual(error, .invalidWordTimings)
         }
+    }
+
+    func testCancellationAfterBackendReturnsDoesNotCommitTranscript() async throws {
+        let source = try fixture("tone3")
+        let asset = try await MediaProbe().probe(fileURL: source, displayName: "Tone").asset
+        let job = Task {
+            try await TranscriptEngine().transcribe(
+                sourceURL: source, asset: asset, backend: CancellingBackend())
+        }
+        do {
+            _ = try await job.value
+            XCTFail("Cancelled transcription must not return a complete transcript")
+        } catch is CancellationError { }
     }
 
     func testOpenRouterWordResponseRequiresTimings() async throws {
