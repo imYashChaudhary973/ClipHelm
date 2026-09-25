@@ -57,7 +57,7 @@ final class YouTubeEndToEndTests: XCTestCase {
         let result = try await ProcessingCoordinator(ingestor: ingestor).run(prepared: source,
             expectedAsset: source.asset, configuration: configuration,
             cacheDirectory: output.appending(path: "Cache"), outputDirectory: output.appending(path: "Exports"),
-            backend: AppleSpeechBackend(), modelID: model, gateway: gateway, registry: registry) { timer.observe($0.stage) }
+            backend: try await OnDeviceSpeech.backend(), modelID: model, gateway: gateway, registry: registry) { timer.observe($0.stage) }
         var usage = rusage()
         getrusage(RUSAGE_SELF, &usage)
         print("QA_E2E_PROCESS_SECONDS=\(Date().timeIntervalSince(processed))")

@@ -138,7 +138,7 @@ private final class WorkspacePlaybackController: ObservableObject {
                     try await registry.selectModel(id: model.id, for: .transcription)
                     backend = try OpenRouterTranscriptionBackend(gateway: gateway, model: model)
                 } else {
-                    backend = AppleSpeechBackend()
+                    backend = try await OnDeviceSpeech.backend()
                 }
                 let result = try await TranscriptEngine().transcribe(
                     sourceURL: source.fileURL, asset: source.asset, backend: backend) { [weak self] update in
@@ -352,11 +352,14 @@ private final class WorkspacePlaybackController: ObservableObject {
                     }
                     try await registry.selectModel(id: vision.id, for: .visionAnalysis)
                 }
+                processingProgress = ProcessingProgress(stage: .preparing, fraction: 0,
+                    detail: "Preparing on-device speech recognition")
+                let speech = try await OnDeviceSpeech.backend()
                 let result = try await ProcessingCoordinator(ingestor: ingestor).run(
                     prepared: source, expectedAsset: project.mediaAsset,
                     configuration: project.configuration, cachedTranscript: project.transcript,
                     cacheDirectory: cacheDirectory, outputDirectory: outputDirectory,
-                    backend: AppleSpeechBackend(), modelID: modelID,
+                    backend: speech, modelID: modelID,
                     gateway: gateway, registry: registry) { [weak self] update in
                     Task { @MainActor [weak self] in
                         if self?.processingRunID == runID { self?.processingProgress = update }
