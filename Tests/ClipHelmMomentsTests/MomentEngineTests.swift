@@ -137,6 +137,22 @@ final class MomentEngineTests: XCTestCase {
         XCTAssertTrue((result.explanation ?? "").contains("best available"))
     }
 
+    func testSelectedMomentsNeverShareHalfOfTheShorterClip() async throws {
+        let input = try fixture("podcast", long: true)
+        let result = try await MomentEngine(maximumSemanticWindows: 40).discover(
+            asset: input.asset, transcript: input.transcript, analysis: input.analysis,
+            selectedLengths: [.seconds30to60], requestedCount: nil,
+            modelID: "fixture/model", gateway: RatingGateway())
+        XCTAssertGreaterThan(result.moments.count, 1)
+        for (index, first) in result.moments.enumerated() {
+            for second in result.moments.dropFirst(index + 1) {
+                let a = first.proposal.range, b = second.proposal.range
+                let overlap = max(0, min(a.end.microseconds, b.end.microseconds) - max(a.start.microseconds, b.start.microseconds))
+                XCTAssertLessThan(Double(overlap) / Double(min(a.durationMicroseconds, b.durationMicroseconds)), 0.5)
+            }
+        }
+    }
+
     func testSomeFailedRequestsStillProduceMoments() async throws {
         let input = try fixture("podcast")
         let gateway = RatingGateway(failure: .invalidResponse, failEvery: 3)

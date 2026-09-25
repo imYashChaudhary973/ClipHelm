@@ -441,9 +441,9 @@ private enum LocalMomentDiscovery {
             let duplicate = selected.contains { other in
                 let overlap = max(Int64(0), min(range.end.microseconds, other.proposal.range.end.microseconds) -
                     max(range.start.microseconds, other.proposal.range.start.microseconds))
-                let union = max(range.end.microseconds, other.proposal.range.end.microseconds) -
-                    min(range.start.microseconds, other.proposal.range.start.microseconds)
-                if Double(overlap) / Double(max(1, union)) >= 0.6 { return true }
+                // Two clips that share half of the shorter one would show viewers the same moment.
+                let shorter = min(range.durationMicroseconds, other.proposal.range.durationMicroseconds)
+                if Double(overlap) / Double(max(1, shorter)) >= 0.5 { return true }
                 let previous = tokens(in: other.proposal.range, words: words)
                 let similarity = Double(currentTokens.intersection(previous).count) /
                     Double(max(1, currentTokens.union(previous).count))
