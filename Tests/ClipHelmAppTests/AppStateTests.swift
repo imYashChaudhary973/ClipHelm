@@ -10,6 +10,14 @@ import ClipHelmProcessing
 
 @MainActor
 final class AppStateTests: XCTestCase {
+    func testDirectURLImportIsHiddenAndOldDraftFallsBackToLocal() throws {
+        XCTAssertFalse(SourceKind.availableCases.contains(.directURL))
+        var draft = ProjectDraft()
+        draft.sourceKind = .directURL
+        let restored = try JSONDecoder().decode(ProjectDraft.self, from: JSONEncoder().encode(draft))
+        XCTAssertEqual(restored.sourceKind, .local)
+    }
+
     func testProjectRestoresWithoutPersistingRemoteURL() throws {
         let root = FileManager.default.temporaryDirectory
             .appending(path: "ClipHelm-Test-\(UUID().uuidString)", directoryHint: .isDirectory)

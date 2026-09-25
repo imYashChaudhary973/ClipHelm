@@ -131,7 +131,7 @@ struct WizardView: View {
     private var sourceContent: some View {
         VStack(alignment: .leading, spacing: 20) {
             Picker("Source", selection: $draft.sourceKind) {
-                ForEach(SourceKind.allCases) { kind in Text(kind.rawValue).tag(kind) }
+                ForEach(SourceKind.availableCases) { kind in Text(kind.rawValue).tag(kind) }
             }
             .pickerStyle(.segmented)
             .labelsHidden()

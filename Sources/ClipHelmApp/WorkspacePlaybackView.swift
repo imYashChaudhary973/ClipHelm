@@ -467,7 +467,13 @@ struct WorkspacePlaybackView: View {
                 }
                 .disabled(reattaching)
             }
-            if source == nil && project.sourceKind != .local {
+            if source == nil && project.sourceKind == .directURL &&
+                !SourceImportPolicy.directURLImportEnabled {
+                Text(SourceIngestError.directURLDisabled.localizedDescription)
+                    .foregroundStyle(.secondary)
+            }
+            if source == nil && (project.sourceKind == .youtube ||
+                (project.sourceKind == .directURL && SourceImportPolicy.directURLImportEnabled)) {
                 TextField("Original video URL", text: $remoteLink)
                     .textFieldStyle(.roundedBorder)
                 Toggle("I own this video or have permission to process it", isOn: $authorizedRemote)

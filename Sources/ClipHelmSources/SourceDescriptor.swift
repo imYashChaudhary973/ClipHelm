@@ -1,10 +1,16 @@
 import Foundation
 import ClipHelmCore
 
+public enum SourceImportPolicy {
+    // Re-enable only after the connected address is verified against the public-address policy.
+    public static let directURLImportEnabled = false
+}
+
 public enum SourceIngestError: Error, LocalizedError, Equatable, Sendable {
     case unsupportedSource
     case authorizationRequired
     case unsafeURL
+    case directURLDisabled
     case duplicateInProgress
     case downloadFailed
     case downloadTooLarge
@@ -17,6 +23,7 @@ public enum SourceIngestError: Error, LocalizedError, Equatable, Sendable {
         case .unsupportedSource: "Choose an MP4, MKV, or MOV video."
         case .authorizationRequired: "Confirm that you own this video or have permission to process it."
         case .unsafeURL: "Use a public HTTPS video link without redirects or private-network addresses."
+        case .directURLDisabled: "Direct video links are unavailable while import security is being improved. Choose a local file or an authorized YouTube link."
         case .duplicateInProgress: "This video is already being prepared."
         case .downloadFailed: "The video could not be downloaded. Check the link and try again."
         case .downloadTooLarge: "The video exceeds the 2 GB remote download limit."

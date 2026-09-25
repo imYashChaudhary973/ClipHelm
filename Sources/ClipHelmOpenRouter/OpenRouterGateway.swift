@@ -8,6 +8,7 @@ public enum CatalogFilter: String, Sendable, Hashable {
 
 public enum OpenRouterGatewayError: Error, LocalizedError, Equatable, Sendable {
     case invalidKey
+    case insufficientCredits
     case rateLimited
     case networkUnavailable
     case serviceUnavailable
@@ -17,6 +18,7 @@ public enum OpenRouterGatewayError: Error, LocalizedError, Equatable, Sendable {
     public var errorDescription: String? {
         switch self {
         case .invalidKey: "OpenRouter rejected this API key. Replace it in Settings."
+        case .insufficientCredits: "OpenRouter credits are insufficient. Add credits in OpenRouter and try again."
         case .rateLimited: "OpenRouter is rate limiting requests. Try again later."
         case .networkUnavailable: "Could not reach OpenRouter. Check your connection and try again."
         case .serviceUnavailable: "OpenRouter is unavailable. Try again later."
@@ -246,6 +248,7 @@ public actor LiveOpenRouterGateway: OpenRouterGateway {
         switch http.statusCode {
         case 200..<300: break
         case 401, 403: throw OpenRouterGatewayError.invalidKey
+        case 402: throw OpenRouterGatewayError.insufficientCredits
         case 429: throw OpenRouterGatewayError.rateLimited
         case 400 where path == "/api/v1/audio/transcriptions": throw OpenRouterGatewayError.unsupportedTranscription
         case 500..<600: throw OpenRouterGatewayError.serviceUnavailable
