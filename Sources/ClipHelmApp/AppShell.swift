@@ -1,6 +1,7 @@
 import SwiftUI
 import ClipHelmCore
 import ClipHelmSources
+import ClipHelmProcessing
 
 struct AppShell: View {
     @ObservedObject var navigation: NavigationState
@@ -264,7 +265,8 @@ struct AppShell: View {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(project.title).font(.title2.weight(.semibold))
-                    Text("Draft workspace").foregroundStyle(.secondary)
+                    Text(project.clips.isEmpty ? "Project workspace" : "\(project.clips.count) clips ready")
+                        .foregroundStyle(.secondary)
                 }
                 Spacer()
                 Label("Saved", systemImage: "checkmark.circle")
@@ -272,22 +274,43 @@ struct AppShell: View {
             }
             WorkspacePlaybackView(project: project, source: sessionSources[project.id],
                 analysisCacheDirectory: try? store.analysisCacheDirectory(for: project.id),
+                exportsDirectory: try? store.exportsDirectory(for: project.id),
+                ingestor: sourceIngestor,
                 saveTranscript: { try store.saveTranscript($0, for: project.id) },
-                reattachSource: { try await reattachSource($0, to: project) })
+                saveProcessingResult: { try store.saveProcessingResult($0, for: project.id) },
+                reattachSource: { try await reattachSource($0, to: project) },
+                reattachRemote: { try await reattachRemote($0, authorized: $1,
+                    to: project, progress: $2) })
             Divider()
             HStack {
-                Text("Timeline").font(.headline)
+                Text("Generated clips").font(.headline)
                 Spacer()
-                Text("No clips yet").foregroundStyle(.secondary)
+                Text("\(project.clips.count)").foregroundStyle(.secondary)
             }
-            RoundedRectangle(cornerRadius: 6)
-                .fill(Color(nsColor: .quaternaryLabelColor).opacity(0.35))
-                .frame(height: 68)
-                .overlay {
-                    Text("Clips will appear here after processing")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
+            if project.clips.isEmpty {
+                Text("Processed clips will appear here.").foregroundStyle(.secondary)
+            } else if let directory = try? store.exportsDirectory(for: project.id) {
+                ForEach(project.clips) { clip in
+                    let previewURL = directory.appending(path: clip.previewFileName)
+                    let finalURL = directory.appending(path: clip.finalFileName)
+                    HStack {
+                        VStack(alignment: .leading) {
+                            Text(clip.proposal.title).fontWeight(.medium)
+                            Text(clip.proposal.rationale).font(.callout).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Preview") {
+                            NSWorkspace.shared.open(previewURL)
+                        }
+                        .disabled(!FileManager.default.fileExists(atPath: previewURL.path))
+                        Button("Reveal MP4") {
+                            NSWorkspace.shared.activateFileViewerSelecting([finalURL])
+                        }
+                        .disabled(!FileManager.default.fileExists(atPath: finalURL.path))
+                    }
+                    Divider()
                 }
+            }
         }
         .padding(24)
         }
@@ -341,6 +364,28 @@ struct AppShell: View {
             throw SourceIngestError.invalidMedia
         }
         sessionSources[project.id] = PreparedSource(descriptor: prepared.descriptor,
+            fileURL: prepared.fileURL, asset: original, hasAudio: prepared.hasAudio)
+    }
+
+    private func reattachRemote(_ rawURL: String, authorized: Bool,
+                                to project: ProjectRecord,
+                                progress: @escaping @Sendable (SourceProgress) -> Void) async throws {
+        guard project.sourceKind != .local, let original = project.mediaAsset else {
+            throw SourceIngestError.invalidMedia
+        }
+        let descriptor = try SourceDescriptor(remoteURL: rawURL,
+            youtube: project.sourceKind == .youtube, authorized: authorized)
+        guard URLComponents(string: rawURL)?.host?.lowercased() == project.sourceLabel else {
+            throw SourceIngestError.invalidMedia
+        }
+        let prepared = try await sourceIngestor.prepare(descriptor, progress: progress)
+        try Task.checkCancellation()
+        guard prepared.asset.duration == original.duration,
+              prepared.asset.width == original.width,
+              prepared.asset.height == original.height else {
+            throw SourceIngestError.invalidMedia
+        }
+        sessionSources[project.id] = PreparedSource(descriptor: descriptor,
             fileURL: prepared.fileURL, asset: original, hasAudio: prepared.hasAudio)
     }
 

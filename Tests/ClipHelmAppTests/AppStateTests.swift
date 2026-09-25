@@ -3,6 +3,9 @@ import AppKit
 import SwiftUI
 import XCTest
 import ClipHelmCore
+import ClipHelmSources
+import ClipHelmAnalysis
+import ClipHelmProcessing
 @testable import ClipHelmApp
 
 @MainActor
@@ -35,6 +38,53 @@ final class AppStateTests: XCTestCase {
         XCTAssertFalse(json.contains("video.mp4"))
     }
 
+    func testCompletedClipsPersistAndRejectOutsideOutputPaths() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "ClipHelm-Exports-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        var draft = ProjectDraft()
+        draft.sourceName = "source.mov"
+        let asset = try MediaAsset(id: AssetID(), displayName: "source.mov",
+            duration: MediaTime(microseconds: 12_000_000), width: 1920, height: 1080)
+        let store = ProjectStore(rootURL: root)
+        let project = try store.save(draft: draft, mediaAsset: asset)
+        let range = try MediaTimeRange(start: MediaTime(microseconds: 0), end: asset.duration)
+        let source = PreparedSource(descriptor: try SourceDescriptor(localFile: URL(fileURLWithPath: "/tmp/source.mov")),
+            fileURL: URL(fileURLWithPath: "/tmp/source.mov"), asset: asset, hasAudio: false)
+        let proposal = try ClipProposal(assetID: asset.id, range: range,
+            title: "Good moment", rationale: "Test", confidence: 0.8)
+        let spec = try ClipHelmEditSpec(clipID: ClipID(), sourceAssetID: asset.id,
+            segments: [EditSegment(sourceRange: range)], outputFormat: .vertical,
+            framingMode: .classicFullFrame, pacingMode: .balanced,
+            soundMode: .mute, captionStyle: nil)
+        let analysis = try AnalysisResult(asset: asset,
+            scenes: [Scene(assetID: asset.id, range: range)], signals: [],
+            detections: [], subjectTracks: [],
+            classifications: [ContentClassification(range: range, kind: .unknown, confidence: 0.1)])
+        let directory = try store.exportsDirectory(for: project.id)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let preview = directory.appending(path: "preview.mp4")
+        let final = directory.appending(path: "final.mp4")
+        try Data([0]).write(to: preview)
+        try Data([0]).write(to: final)
+        let transcript = try Transcript(assetID: asset.id, segments: [])
+        let good = ProcessingResult(source: source, transcript: transcript, analysis: analysis,
+            clips: [ProcessedClip(proposal: proposal, spec: spec,
+                                  previewURL: preview, finalURL: final)], explanation: nil)
+        let outside = root.appending(path: "outside.mp4")
+        try Data([0]).write(to: outside)
+        let bad = ProcessingResult(source: source, transcript: transcript, analysis: analysis,
+            clips: [ProcessedClip(proposal: proposal, spec: spec,
+                                  previewURL: outside, finalURL: final)], explanation: nil)
+        XCTAssertThrowsError(try store.saveProcessingResult(bad, for: project.id))
+        XCTAssertTrue(store.projects[0].clips.isEmpty)
+        try store.saveProcessingResult(good, for: project.id)
+        let restored = try XCTUnwrap(ProjectStore(rootURL: root).projects.first)
+        XCTAssertEqual(restored.clips.count, 1)
+        XCTAssertEqual(restored.clips[0].spec, spec)
+        XCTAssertFalse(restored.configuration.captionStyle != nil)
+    }
+
     func testEveryGuidedChoicePersistsAsConfiguration() throws {
         let root = FileManager.default.temporaryDirectory
             .appending(path: "ClipHelm-Configuration-\(UUID().uuidString)")
@@ -42,6 +92,7 @@ final class AppStateTests: XCTestCase {
         var draft = ProjectDraft()
         draft.sourceName = "lesson.mov"
         draft.preset = .horizontal
+        draft.resolution = .uhd4k
         draft.framingMode = .blurred
         draft.smartEdit = SmartEditOptions(useVisionForTrickyShots: true, cutDeadAir: false,
                                            trimLongPauses: true, cleanFillers: true, keepDemos: false)
@@ -57,7 +108,9 @@ final class AppStateTests: XCTestCase {
         let saved = try ProjectStore(rootURL: root).save(draft: draft)
         let restored = try XCTUnwrap(ProjectStore(rootURL: root).projects.first)
         XCTAssertEqual(restored.configuration, saved.configuration)
-        XCTAssertEqual(restored.configuration.outputFormat, .horizontal)
+        XCTAssertEqual(restored.configuration.outputFormat.width, 3840)
+        XCTAssertEqual(restored.configuration.outputFormat.height, 2160)
+        XCTAssertEqual(restored.configuration.outputFormat, try draft.configuration.outputFormat)
         XCTAssertEqual(restored.configuration.selectedLengths, [.seconds10to30, .minutes2to5])
         XCTAssertEqual(restored.configuration.requestedClipCount, 7)
         XCTAssertEqual(restored.configuration.soundMode, .normalize)

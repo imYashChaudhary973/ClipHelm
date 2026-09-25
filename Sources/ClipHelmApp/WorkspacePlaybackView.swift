@@ -9,6 +9,7 @@ import ClipHelmTranscription
 import ClipHelmAnalysis
 import ClipHelmMoments
 import ClipHelmCaptions
+import ClipHelmProcessing
 import UniformTypeIdentifiers
 
 @MainActor
@@ -25,6 +26,8 @@ private final class WorkspacePlaybackController: ObservableObject {
     @Published var analysis: AnalysisResult?
     @Published var momentModels: [OpenRouterModel] = []
     @Published var selectedMomentModelID = ""
+    @Published var visionModels: [OpenRouterModel] = []
+    @Published var selectedVisionModelID = ""
     @Published var loadingMomentModels = false
     @Published var discoveringMoments = false
     @Published var momentProgress: MomentDiscoveryProgress?
@@ -33,6 +36,8 @@ private final class WorkspacePlaybackController: ObservableObject {
     @Published var selectedModelID = ""
     @Published var loadingModels = false
     @Published var message: String?
+    @Published var processing = false
+    @Published var processingProgress: ProcessingProgress?
 
     private let gateway = LiveOpenRouterGateway(secrets: OpenRouterSecretVault())
     private lazy var registry = OpenRouterModelRegistry(gateway: gateway)
@@ -41,11 +46,13 @@ private final class WorkspacePlaybackController: ObservableObject {
     private var analysisJob: Task<Void, Never>?
     private var momentJob: Task<Void, Never>?
     private var catalogJob: Task<Void, Never>?
+    private var processingJob: Task<Void, Never>?
     private var captionJob: Task<Void, Never>?
     private var transcriptionRunID = UUID()
     private var analysisRunID = UUID()
     private var momentRunID = UUID()
     private var captionRunID = UUID()
+    private var processingRunID = UUID()
 
     func start(project: ProjectRecord, source: PreparedSource?) {
         stop()
@@ -202,8 +209,11 @@ private final class WorkspacePlaybackController: ObservableObject {
                 _ = try await registry.refresh()
                 try Task.checkCancellation()
                 momentModels = await registry.models(supporting: [.text, .structuredOutput])
+                visionModels = await registry.models(supporting: [.vision, .structuredOutput])
                 selectedMomentModelID = (await registry.selectedModel(for: .clipDiscovery))?.id
                     ?? momentModels.first?.id ?? ""
+                selectedVisionModelID = (await registry.selectedModel(for: .visionAnalysis))?.id
+                    ?? visionModels.first?.id ?? ""
                 if momentModels.isEmpty { message = "No structured text models are available for this key." }
             } catch is CancellationError {
             } catch {
@@ -263,6 +273,67 @@ private final class WorkspacePlaybackController: ObservableObject {
         }
     }
 
+    func process(project: ProjectRecord, source: PreparedSource, ingestor: SourceIngestor,
+                 cacheDirectory: URL, outputDirectory: URL,
+                 save: @escaping @MainActor (ProcessingResult) throws -> Void) {
+        processingJob?.cancel()
+        let runID = UUID()
+        processingRunID = runID
+        processing = true
+        processingProgress = nil
+        message = nil
+        processingJob = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let needsModel = project.transcript?.hasMeaningfulSpeech ?? source.hasAudio
+                let modelID: String?
+                if needsModel {
+                    guard let model = momentModels.first(where: { $0.id == selectedMomentModelID }) else {
+                        throw MomentEngineError.modelRequired
+                    }
+                    try await registry.selectModel(id: model.id, for: .clipDiscovery)
+                    modelID = model.id
+                } else { modelID = nil }
+                if project.configuration.smartEdit.useVisionForTrickyShots {
+                    guard let vision = visionModels.first(where: { $0.id == selectedVisionModelID }) else {
+                        throw OpenRouterModelRegistryError.modelUnavailable
+                    }
+                    try await registry.selectModel(id: vision.id, for: .visionAnalysis)
+                }
+                let result = try await ProcessingCoordinator(ingestor: ingestor).run(
+                    prepared: source, expectedAsset: project.mediaAsset,
+                    configuration: project.configuration, cachedTranscript: project.transcript,
+                    cacheDirectory: cacheDirectory, outputDirectory: outputDirectory,
+                    backend: AppleSpeechBackend(), modelID: modelID,
+                    gateway: gateway, registry: registry) { [weak self] update in
+                    Task { @MainActor [weak self] in
+                        if self?.processingRunID == runID { self?.processingProgress = update }
+                    }
+                }
+                try Task.checkCancellation()
+                guard processingRunID == runID else { return }
+                try save(result)
+                transcript = result.transcript
+                analysis = result.analysis
+                prepareCaptions(transcript: result.transcript, configuration: project.configuration,
+                                asset: source.asset)
+                message = result.explanation ?? "Created \(result.clips.count) clips."
+            } catch is CancellationError {
+            } catch let error as LocalizedError {
+                if processingRunID == runID { message = error.errorDescription ?? "Processing stopped. Try again." }
+            } catch {
+                if processingRunID == runID { message = "Processing stopped. Check the source and destination, then try again." }
+            }
+            if processingRunID == runID { processing = false }
+        }
+    }
+
+    func cancelProcessing() {
+        processingRunID = UUID()
+        processingJob?.cancel()
+        processing = false
+    }
+
     private func prepareCaptions(transcript: Transcript?, configuration: ClipConfiguration,
                                  asset: MediaAsset) {
         captionJob?.cancel()
@@ -307,6 +378,7 @@ private final class WorkspacePlaybackController: ObservableObject {
     }
 
     func stop() {
+        cancelProcessing()
         proxyJob?.cancel()
         transcriptJob?.cancel()
         analysisJob?.cancel()
@@ -345,13 +417,21 @@ struct WorkspacePlaybackView: View {
     let project: ProjectRecord
     let source: PreparedSource?
     let analysisCacheDirectory: URL?
+    let exportsDirectory: URL?
+    let ingestor: SourceIngestor
     let saveTranscript: @MainActor (Transcript) throws -> Void
+    let saveProcessingResult: @MainActor (ProcessingResult) throws -> Void
     let reattachSource: @MainActor (URL) async throws -> Void
+    let reattachRemote: @MainActor (String, Bool, @escaping @Sendable (SourceProgress) -> Void) async throws -> Void
     @StateObject private var controller = WorkspacePlaybackController()
     @State private var useOpenRouter = false
     @State private var search = ""
     @State private var showingSourcePicker = false
     @State private var reattaching = false
+    @State private var remoteLink = ""
+    @State private var authorizedRemote = false
+    @State private var reattachProgress: SourceProgress?
+    @State private var reattachTask: Task<Void, Never>?
 
     private var matchingSegments: [TranscriptSegment] {
         guard let transcript = controller.transcript else { return [] }
@@ -386,6 +466,46 @@ struct WorkspacePlaybackView: View {
                     showingSourcePicker = true
                 }
                 .disabled(reattaching)
+            }
+            if source == nil && project.sourceKind != .local {
+                TextField("Original video URL", text: $remoteLink)
+                    .textFieldStyle(.roundedBorder)
+                Toggle("I own this video or have permission to process it", isOn: $authorizedRemote)
+                Button(reattaching ? "Preparing…" : "Prepare Original Video") {
+                    reattaching = true
+                    reattachProgress = nil
+                    reattachTask = Task { @MainActor in
+                        do {
+                            try await reattachRemote(remoteLink, authorizedRemote) { update in
+                                Task { @MainActor in reattachProgress = update }
+                            }
+                        } catch is CancellationError {
+                            return
+                        }
+                        catch let error as SourceIngestError {
+                            controller.message = error.localizedDescription
+                        } catch {
+                            controller.message = "That video does not match this project. Check the link and try again."
+                        }
+                        reattaching = false
+                    }
+                }
+                .disabled(reattaching || !authorizedRemote || remoteLink.isEmpty)
+                if reattaching {
+                    HStack {
+                        if let fraction = reattachProgress?.fraction {
+                            ProgressView(value: fraction).frame(width: 180)
+                        } else { ProgressView().controlSize(.small) }
+                        Text(reattachProgress?.stage == .downloading ? "Downloading…" : "Checking source…")
+                            .foregroundStyle(.secondary)
+                        Button("Cancel") {
+                            reattachTask?.cancel()
+                            reattaching = false
+                        }
+                    }
+                }
+                Text("Re-enter the public source link after relaunch. ClipHelm does not store remote URLs.")
+                    .font(.callout).foregroundStyle(.secondary)
             }
 
             if controller.preparingProxy {
@@ -589,10 +709,71 @@ struct WorkspacePlaybackView: View {
                     .buttonStyle(.plain)
                 }
             }
+
+            Divider()
+            HStack {
+                Text("Process clips").font(.title3.weight(.semibold))
+                Spacer()
+                if source?.hasAudio == true || project.configuration.smartEdit.useVisionForTrickyShots {
+                    Button(controller.loadingMomentModels ? "Loading…" : "Load Models") {
+                        controller.loadMomentModels()
+                    }
+                    .disabled(controller.loadingMomentModels || controller.processing)
+                }
+            }
+            if let source, let analysisCacheDirectory, let exportsDirectory {
+                let needsModel = project.transcript?.hasMeaningfulSpeech ?? source.hasAudio
+                if needsModel {
+                    if !controller.momentModels.isEmpty {
+                        Picker("Moment model", selection: $controller.selectedMomentModelID) {
+                            ForEach(controller.momentModels) { model in Text(model.name).tag(model.id) }
+                        }
+                    } else {
+                        Text("Load a structured text model for spoken moments.")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                if project.configuration.smartEdit.useVisionForTrickyShots {
+                    if !controller.visionModels.isEmpty {
+                        Picker("Vision model", selection: $controller.selectedVisionModelID) {
+                            ForEach(controller.visionModels) { model in Text(model.name).tag(model.id) }
+                        }
+                    } else {
+                        Text("Load a structured vision model for uncertain shots.")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                if controller.processing {
+                    HStack {
+                        ProgressView(value: controller.processingProgress?.fraction ?? 0)
+                            .frame(width: 180)
+                        Text(controller.processingProgress?.stage.rawValue ?? "Preparing")
+                            .foregroundStyle(.secondary)
+                        Button("Cancel") { controller.cancelProcessing() }
+                    }
+                    if let detail = controller.processingProgress?.detail {
+                        Text(detail).font(.callout).foregroundStyle(.secondary)
+                    }
+                } else {
+                    Button("Process Clips") {
+                        controller.process(project: project, source: source, ingestor: ingestor,
+                            cacheDirectory: analysisCacheDirectory, outputDirectory: exportsDirectory,
+                            save: saveProcessingResult)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled((needsModel && controller.selectedMomentModelID.isEmpty) ||
+                              (project.configuration.smartEdit.useVisionForTrickyShots &&
+                               controller.selectedVisionModelID.isEmpty))
+                    Text("Processing uses on-device speech recognition and local analysis. OpenRouter evaluates selected transcript windows and, if enabled, uncertain shots. It uses API credits.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+            } else {
+                Text("Locate the original video to process clips.").foregroundStyle(.secondary)
+            }
         }
         .frame(maxWidth: 1000, alignment: .leading)
         .task(id: source?.fileURL) { controller.start(project: project, source: source) }
-        .onDisappear { controller.stop() }
+        .onDisappear { reattachTask?.cancel(); controller.stop() }
         .fileImporter(isPresented: $showingSourcePicker,
             allowedContentTypes: [.movie, .mpeg4Movie, UTType(filenameExtension: "mkv") ?? .movie]) { result in
             guard case .success(let url) = result else { return }

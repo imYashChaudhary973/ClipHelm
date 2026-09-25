@@ -1,6 +1,8 @@
 import Foundation
 import SwiftUI
 import ClipHelmCore
+import ClipHelmEditing
+import ClipHelmProcessing
 
 enum SourceKind: String, Codable, CaseIterable, Identifiable {
     case local = "Local video"
@@ -18,6 +20,12 @@ enum CanvasPreset: String, Codable, CaseIterable, Identifiable {
     var format: OutputFormat { self == .vertical ? .vertical : .horizontal }
 }
 
+enum RenderResolution: String, Codable, CaseIterable, Identifiable {
+    case hd1080 = "1080p"
+    case uhd4k = "4K"
+    var id: String { rawValue }
+}
+
 enum ClipCountMode: String, Codable, CaseIterable {
     case aiDecides = "AI decides"
     case fixed = "Fixed number"
@@ -30,6 +38,7 @@ struct ProjectDraft: Codable, Equatable {
     var sourceName = ""
     var remoteURL = ""
     var preset: CanvasPreset = .vertical
+    var resolution: RenderResolution = .hd1080
     var framingMode: FramingMode = .smartAuto
     var smartEdit = SmartEditOptions(useVisionForTrickyShots: false, cutDeadAir: true,
                                      trimLongPauses: true, cleanFillers: false, keepDemos: true)
@@ -47,7 +56,7 @@ struct ProjectDraft: Codable, Equatable {
 
     // Source names and URLs are intentionally omitted: access must be re-granted after relaunch.
     private enum CodingKeys: String, CodingKey {
-        case title, sourceKind, preset, framingMode, smartEdit, pacingMode, lengths
+        case title, sourceKind, preset, resolution, framingMode, smartEdit, pacingMode, lengths
         case countMode, requestedClipCount, soundMode, captionsEnabled, captionStyle
         case captionWordByWord, captionBlurIn
     }
@@ -57,6 +66,7 @@ struct ProjectDraft: Codable, Equatable {
         title = try c.decode(String.self, forKey: .title)
         sourceKind = try c.decode(SourceKind.self, forKey: .sourceKind)
         preset = try c.decode(CanvasPreset.self, forKey: .preset)
+        resolution = try c.decodeIfPresent(RenderResolution.self, forKey: .resolution) ?? .hd1080
         framingMode = try c.decode(FramingMode.self, forKey: .framingMode)
         smartEdit = try c.decodeIfPresent(SmartEditOptions.self, forKey: .smartEdit) ?? smartEdit
         pacingMode = try c.decodeIfPresent(PacingMode.self, forKey: .pacingMode) ?? pacingMode
@@ -72,7 +82,10 @@ struct ProjectDraft: Codable, Equatable {
 
     var configuration: ClipConfiguration {
         get throws {
-            try ClipConfiguration(outputFormat: preset.format, framingMode: framingMode,
+            let format = resolution == .hd1080 ? preset.format :
+                try OutputFormat(width: preset == .vertical ? 2160 : 3840,
+                                 height: preset == .vertical ? 3840 : 2160)
+            return try ClipConfiguration(outputFormat: format, framingMode: framingMode,
                                   pacingMode: pacingMode,
                                   selectedLengths: ClipLength.allCases.filter { lengths.contains($0) },
                                   requestedClipCount: countMode == .aiDecides ? nil : requestedClipCount,
@@ -101,8 +114,33 @@ struct ProjectDraft: Codable, Equatable {
     }
 }
 
+struct ProjectClipRecord: Codable, Identifiable {
+    let proposal: ClipProposal
+    let spec: ClipHelmEditSpec
+    let previewFileName: String
+    let finalFileName: String
+
+    var id: ClipID { spec.clipID }
+
+    init(_ clip: ProcessedClip) {
+        proposal = clip.proposal
+        spec = clip.spec
+        previewFileName = clip.previewURL.lastPathComponent
+        finalFileName = clip.finalURL.lastPathComponent
+    }
+
+    func validate(for asset: MediaAsset) throws {
+        guard previewFileName == URL(fileURLWithPath: previewFileName).lastPathComponent,
+              finalFileName == URL(fileURLWithPath: finalFileName).lastPathComponent,
+              previewFileName.hasSuffix(".mp4"), finalFileName.hasSuffix(".mp4") else {
+            throw ModelError.invalid("Project clip file name")
+        }
+        try EditSpecValidator().validate(spec, for: asset, proposal: proposal)
+    }
+}
+
 struct ProjectRecord: Codable, Identifiable {
-    static let currentVersion = 2
+    static let currentVersion = 3
 
     let schemaVersion: Int
     let id: ProjectID
@@ -113,6 +151,7 @@ struct ProjectRecord: Codable, Identifiable {
     var configuration: ClipConfiguration
     let mediaAsset: MediaAsset?
     var transcript: Transcript?
+    var clips: [ProjectClipRecord]
 
     var outputFormat: OutputFormat { configuration.outputFormat }
     var framingMode: FramingMode { configuration.framingMode }
@@ -135,18 +174,19 @@ struct ProjectRecord: Codable, Identifiable {
         configuration = try draft.configuration
         self.mediaAsset = mediaAsset
         transcript = nil
+        clips = []
     }
 
     private enum CodingKeys: String, CodingKey {
         case schemaVersion, id, title, createdAt, sourceKind, sourceLabel
-        case configuration, mediaAsset, transcript
+        case configuration, mediaAsset, transcript, clips
         case outputFormat, framingMode, selectedLengths, captionStyle
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let version = try c.decode(Int.self, forKey: .schemaVersion)
-        guard version == 1 || version == Self.currentVersion else {
+        guard (1...Self.currentVersion).contains(version) else {
             throw ModelError.invalid("ProjectRecord version")
         }
         schemaVersion = Self.currentVersion
@@ -157,6 +197,7 @@ struct ProjectRecord: Codable, Identifiable {
         sourceLabel = try c.decode(String.self, forKey: .sourceLabel)
         mediaAsset = try c.decodeIfPresent(MediaAsset.self, forKey: .mediaAsset)
         transcript = try c.decodeIfPresent(Transcript.self, forKey: .transcript)
+        clips = try c.decodeIfPresent([ProjectClipRecord].self, forKey: .clips) ?? []
         if version == 1 {
             configuration = try ClipConfiguration(
                 outputFormat: c.decode(OutputFormat.self, forKey: .outputFormat),
@@ -183,6 +224,7 @@ struct ProjectRecord: Codable, Identifiable {
         try c.encode(configuration, forKey: .configuration)
         try c.encodeIfPresent(mediaAsset, forKey: .mediaAsset)
         try c.encodeIfPresent(transcript, forKey: .transcript)
+        try c.encode(clips, forKey: .clips)
     }
 }
 
@@ -232,7 +274,13 @@ final class ProjectStore: ObservableObject {
                               guard let asset = record.mediaAsset else { return false }
                               return transcript.assetID == asset.id &&
                                   transcript.words.allSatisfy { $0.range.end <= asset.duration }
-                          }) ?? true else {
+                          }) ?? true,
+                          record.clips.count <= 1_000,
+                          Set(record.clips.map(\.id)).count == record.clips.count,
+                          record.clips.allSatisfy({ clip in
+                              guard let asset = record.mediaAsset else { return false }
+                              return (try? clip.validate(for: asset)) != nil
+                          }) else {
                         throw ModelError.invalid("ProjectRecord")
                     }
                     loaded.append(record)
@@ -286,5 +334,50 @@ final class ProjectStore: ObservableObject {
         }
         return rootURL.appending(path: "\(projectID.rawValue.uuidString).cliphelm/Cache",
                                  directoryHint: .isDirectory)
+    }
+
+    func exportsDirectory(for projectID: ProjectID) throws -> URL {
+        guard let rootURL, projects.contains(where: { $0.id == projectID }) else {
+            throw ModelError.invalid("Exports project")
+        }
+        return rootURL.appending(path: "\(projectID.rawValue.uuidString).cliphelm/Exports",
+                                 directoryHint: .isDirectory)
+    }
+
+    func saveProcessingResult(_ result: ProcessingResult, for projectID: ProjectID) throws {
+        guard let rootURL, let index = projects.firstIndex(where: { $0.id == projectID }),
+              let asset = projects[index].mediaAsset, asset == result.source.asset,
+              result.transcript.assetID == asset.id,
+              result.transcript.words.allSatisfy({ $0.range.end <= asset.duration }),
+              !result.clips.isEmpty else {
+            throw ModelError.invalid("Processing project mismatch")
+        }
+        let directory = try exportsDirectory(for: projectID).standardizedFileURL
+        let records = result.clips.map(ProjectClipRecord.init)
+        for (record, clip) in zip(records, result.clips) {
+            try record.validate(for: asset)
+            guard clip.previewURL.deletingLastPathComponent().standardizedFileURL == directory,
+                  clip.finalURL.deletingLastPathComponent().standardizedFileURL == directory,
+                  FileManager.default.fileExists(atPath: clip.previewURL.path),
+                  FileManager.default.fileExists(atPath: clip.finalURL.path) else {
+                throw ModelError.invalid("Processing output missing")
+            }
+        }
+        var updated = projects[index]
+        updated.transcript = result.transcript
+        if !result.transcript.hasMeaningfulSpeech {
+            updated.configuration = try updated.configuration.disablingCaptions()
+        }
+        updated.clips.append(contentsOf: records)
+        guard updated.clips.count <= 1_000,
+              Set(updated.clips.map(\.id)).count == updated.clips.count else {
+            throw ModelError.invalid("Duplicate or excessive clips")
+        }
+        let data = try JSONEncoder().encode(updated)
+        guard data.count <= 25_000_000 else { throw ModelError.invalid("Project too large") }
+        let manifest = rootURL.appending(path: "\(projectID.rawValue.uuidString).cliphelm/project.json")
+        try data.write(to: manifest, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: manifest.path)
+        projects[index] = updated
     }
 }

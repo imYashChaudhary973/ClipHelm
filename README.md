@@ -1,6 +1,6 @@
 # ClipHelm
 
-Native macOS clip editor in development. Phase 9 adds a deterministic, non-destructive edit-spec engine behind the guided setup. Rendering and final export are still planned.
+Native macOS clip editor in development. Phase 14 connects local analysis, moment discovery, edit planning, and H.264 rendering in the project workspace.
 
 ## Run
 
@@ -13,9 +13,9 @@ open build/ClipHelm.app
 
 The app has Home, Recent Projects, New Clip Project, Settings, and Project Workspace. `⌘N` starts a project; `⌘1`/`⌘2` navigate Home/Recent Projects; `⌘,` opens Settings; `⌘I` toggles the workspace inspector. Use `⌘[` and `⌘]` to move through the guided flow when its buttons are enabled.
 
-After choosing a source, set the destination, framing, smart editing options and pacing, clip lengths, target count, sound, and caption style and effects. Review the choices before saving a draft. A source without an audio track starts with captions off; a later transcript with no speech also disables them. Setup stores these preferences but does not run clip editing or normalization yet.
+After choosing a source, set the aspect ratio and 1080p or 4K export resolution, framing, smart editing options and pacing, clip lengths, target count, sound, and caption style and effects. Review the choices before saving a project. A source without an audio track starts with captions off; a later transcript with no speech also disables them. Select **Process Clips** in the workspace to create preview and final MP4 files.
 
-Draft projects are saved under `~/Library/Application Support/ClipHelm/Projects`. They contain choices, a source label, basic media metadata, and completed transcripts, never source file paths or full remote URLs. On relaunch, the app restores navigation, selected project, inspector visibility, and safe draft preferences. Use **Locate Original Video** in a local-source workspace after relaunch to restore playback and transcript seeking. Remote sources must be imported again because their temporary media is session-only.
+Projects are saved under `~/Library/Application Support/ClipHelm/Projects`. They contain choices, a source label, basic media metadata, completed transcripts, and generated clip specs, never source file paths or full remote URLs. Preview and final files live in each project's `Exports` directory. On relaunch, the app restores generated clips. Use **Locate Original Video** for a local source or re-enter an authorized remote link to restore source access. Remote media remains session-only.
 
 The Source step accepts MP4 and MOV, plus MKV when AVFoundation can decode it. Choose a file or drop it into the window. HTTPS direct video links download into private temporary storage with progress and cancellation; repeated preparation of the same link reuses the session copy. YouTube import accepts public video links for content you own or may process. It requires `yt-dlp` installed at `/opt/homebrew/bin/yt-dlp` or `/usr/local/bin/yt-dlp`; FFmpeg is needed when its best video and audio streams require merging. ClipHelm does not pass cookies or sign-in credentials to it. A failed or protected YouTube link stays unavailable rather than bypassing access controls.
 
@@ -27,7 +27,7 @@ In a workspace, choose **Transcribe on This Mac** to use Apple's on-device speec
 
 To discover moments, run **Analyze on This Mac** in the workspace. With speech, transcribe, load structured text models, select one, then choose **Find Best Moments**. The explicit discovery action uses OpenRouter credits and sends only bounded excerpts from local candidate windows. It ranks, deduplicates, checks selected lengths, and shows a reason when no strong moments remain. Click a result to seek. Without a transcript, it can suggest active visual intervals locally for manual review; no AI call is made. Discovery results are session-only in this phase.
 
-The `ClipHelmEditing` library can turn validated proposals, project choices, and local analysis into an edit spec. It supports source/edited time mapping, retained-range trims and removals, static or animated crop decisions, layouts, audio modes, caption cues, and in-memory undo/redo. The app does not yet expose these edit operations or render their output; see [docs/EDIT_SPEC.md](docs/EDIT_SPEC.md).
+The **Process Clips** action reuses saved transcripts and regeneratable analysis caches, finds qualified moments, checks uncertain shots with AI Vision only when enabled and a vision model is selected, builds validated edit specs, then renders preview and final files. Clip exports can be previewed or revealed in Finder from the workspace. Interactive edit-spec manipulation and a full timeline editor remain future work; see [docs/EDIT_SPEC.md](docs/EDIT_SPEC.md).
 
 ## Tests
 
@@ -35,4 +35,4 @@ The `ClipHelmEditing` library can turn validated proposals, project choices, and
 swift test --disable-sandbox
 ```
 
-The tests cover source validation, 1080p/4K and 25/30/60 fps metadata, proxies, frame sampling, audio extraction, time mapping, transcript chunk mapping and silence detection, local analysis, moment discovery fixtures, edit planning and validation, undo/redo, project restoration, mocked OpenRouter behavior, and Keychain input validation. The live Keychain CRUD test needs access to macOS Keychain. Module contracts are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+The tests cover source validation, media and time mapping, transcription, local analysis, moment discovery, edit planning, project restoration, mocked OpenRouter behavior, Keychain input validation, a network-free full processing run, and real 1080p/4K H.264 exports with crops, captions, and audio. The live Keychain CRUD test needs access to macOS Keychain. Module contracts are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).

@@ -4,7 +4,7 @@ ClipHelm is a local-first native macOS editor. Its own pipeline owns media, time
 
 ## Module boundaries
 
-Dependencies point downward. `ClipHelmCore`, `ClipHelmSecurity`, `ClipHelmOpenRouter`, `ClipHelmMedia`, `ClipHelmSources`, `ClipHelmTranscription`, `ClipHelmAnalysis`, `ClipHelmMoments`, `ClipHelmFraming`, `ClipHelmFramingVision`, `ClipHelmLayouts`, `ClipHelmLayoutVision`, `ClipHelmPacing`, `ClipHelmCaptions`, `ClipHelmEditing`, and the `ClipHelmApp` shell are implemented targets. The remaining modules are design boundaries for later phases.
+Dependencies point downward. `ClipHelmCore`, `ClipHelmSecurity`, `ClipHelmOpenRouter`, `ClipHelmMedia`, `ClipHelmSources`, `ClipHelmTranscription`, `ClipHelmAnalysis`, `ClipHelmMoments`, `ClipHelmFraming`, `ClipHelmFramingVision`, `ClipHelmLayouts`, `ClipHelmLayoutVision`, `ClipHelmPacing`, `ClipHelmCaptions`, `ClipHelmEditing`, `ClipHelmRendering`, `ClipHelmProcessing`, and the `ClipHelmApp` shell are implemented targets. Other rows remain design boundaries.
 
 | Module | Owns | May depend on |
 | --- | --- | --- |
@@ -25,7 +25,8 @@ Dependencies point downward. `ClipHelmCore`, `ClipHelmSecurity`, `ClipHelmOpenRo
 | Pacing | Speech-safe dead-air, long-pause and filler removal proposals | Core, Analysis |
 | Captions | Word track, phrase segmentation, eight parameterized styles, shared preview/export overlay drawing | Core, CoreText, CoreGraphics, CoreImage |
 | Editing | Implemented `ClipHelmEditing`: deterministic planning, source/edited timeline mapping, spec validation, typed operations, and in-memory undo/redo | Core, Analysis, Framing, Layouts, Pacing, Captions |
-| Rendering | Preview/export compiler, AVFoundation/VideoToolbox; optional FFmpeg adapter | Core, Media, Editing |
+| Rendering | Validated edit-spec composition, CoreImage frame treatment, H.264 MP4 preview/final export | Core, Media, Editing, Captions |
+| Processing | Ordered source, transcript, analysis, discovery, optional vision, planning, and batch-render coordination | Sources, Transcription, Analysis, Moments, Framing Vision, Layout Vision, Layouts, Editing, Rendering, OpenRouter |
 | SharedUI | Reusable SwiftUI controls and presentation | Core, SwiftUI |
 
 The app target is the composition root. Settings wires the Keychain vault and OpenRouter gateway; the workspace uses media playback and starts a cancellable proxy task when the source is large. Service modules do not import SwiftUI. `Sources` is the only remote-media entry point; `OpenRouter` is the only AI network entry point. Renderer adapters accept validated `ClipHelmEditSpec`, never model text or raw network input.
@@ -80,4 +81,6 @@ Clip discovery may ask OpenRouter for meaning and ranking, but local evidence su
 - V1 UI offers 9:16 and 16:9. `OutputFormat` stores dimensions so 1:1, 4:5, and custom canvases can be added without changing the time model.
 - Captions are based on word timings and may animate per word or blur in. When no meaningful speech exists, the planner leaves captions disabled by default.
 
-Clip rendering and final export remain later phases.
+Phase 14 adds `ProcessingCoordinator` with progress, cancellation, and typed failures at every stage, including separate preview and final render stages. `ClipRenderer` validates the spec and source metadata, assembles retained source and audio ranges with AVFoundation, maps edited frame time back to source time for crops/layouts/captions, and writes H.264 MP4 through system export presets. It supports 9:16 and 16:9 at 1080p and 4K, plus half-size previews. Audio may be original, muted, or level normalized from a streaming PCM scan. Each export first writes to a unique temporary file and moves it into place after success. No model response can supply a renderer path, filter, URL, or command. The workspace persists completed clip specs and file names, shows stage progress, permits cancellation, and reveals completed exports.
+
+Current layout rendering uses the source frame for speaker/screen insets and halves for split-speaker layouts because version 3 edit specs do not encode per-subject region geometry. Review these layouts before sharing. 4K is available where the system H.264 exporter accepts the source and device; 1080p is the fallback. The current workflow processes and exports in one run; a later review UI may let users adjust edit specs before final export.
