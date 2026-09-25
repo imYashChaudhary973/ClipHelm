@@ -138,7 +138,7 @@ final class SmartAutoFrameTests: XCTestCase {
         let source = try await MediaProbe().probe(fileURL: fixture, displayName: "valid.mp4").asset
         let full = try MediaTimeRange(start: time(0), end: source.duration)
         let local = try analysis(source, kind: .unknown)
-        let all = Data(#"{"data":[{"id":"vendor/vision","name":"Vision","architecture":{"input_modalities":["text","image"],"output_modalities":["text"]},"supported_parameters":["response_format"]}]}"#.utf8)
+        let all = Data(#"{"data":[{"id":"vendor/vision","name":"Vision","architecture":{"input_modalities":["text","image"],"output_modalities":["text"]},"supported_parameters":["response_format","structured_outputs"]}]}"#.utf8)
         let gateway = MockOpenRouterGateway(catalogs: [.all: all, .transcription: Data(#"{"data":[]}"#.utf8)])
         let suite = "ClipHelm-Vision-\(UUID().uuidString)"
         defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }

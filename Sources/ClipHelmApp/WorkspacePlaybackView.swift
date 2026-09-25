@@ -64,6 +64,7 @@ private final class WorkspacePlaybackController: ObservableObject {
         catch { message = "This source is no longer available. Choose it again in a new draft."; return }
         prepareCaptions(transcript: project.transcript, configuration: project.configuration,
                         asset: source.asset)
+        preloadMomentModels()
         proxyJob = Task { [weak self] in
             guard let self else { return }
             do {
@@ -137,7 +138,7 @@ private final class WorkspacePlaybackController: ObservableObject {
                     try await registry.selectModel(id: model.id, for: .transcription)
                     backend = try OpenRouterTranscriptionBackend(gateway: gateway, model: model)
                 } else {
-                    backend = AppleSpeechBackend()
+                    backend = try await OnDeviceSpeech.backend()
                 }
                 let result = try await TranscriptEngine().transcribe(
                     sourceURL: source.fileURL, asset: source.asset, backend: backend) { [weak self] update in
@@ -206,20 +207,71 @@ private final class WorkspacePlaybackController: ObservableObject {
         catalogJob = Task { [weak self] in
             guard let self else { return }
             do {
-                _ = try await registry.refresh()
-                try Task.checkCancellation()
-                momentModels = await registry.models(supporting: [.text, .structuredOutput])
-                visionModels = await registry.models(supporting: [.vision, .structuredOutput])
-                selectedMomentModelID = (await registry.selectedModel(for: .clipDiscovery))?.id
-                    ?? momentModels.first?.id ?? ""
-                selectedVisionModelID = (await registry.selectedModel(for: .visionAnalysis))?.id
-                    ?? visionModels.first?.id ?? ""
+                try await refreshMomentModels()
                 if momentModels.isEmpty { message = "No structured text models are available for this key." }
             } catch is CancellationError {
+            } catch let error as OpenRouterGatewayError {
+                message = error.localizedDescription
             } catch {
                 message = "Could not load OpenRouter models. Check the key in Settings."
             }
             loadingMomentModels = false
+        }
+    }
+
+    /// Loads the catalog and selects the saved choice, or a fast current default, for each task.
+    private func refreshMomentModels() async throws {
+        _ = try await registry.refresh()
+        try Task.checkCancellation()
+        momentModels = await registry.models(supporting: OpenRouterTask.clipDiscovery.requiredCapabilities)
+        visionModels = await registry.models(supporting: OpenRouterTask.visionAnalysis.requiredCapabilities)
+        if !momentModels.contains(where: { $0.id == selectedMomentModelID }) {
+            selectedMomentModelID = (await registry.preferredModel(for: .clipDiscovery))?.id ?? ""
+        }
+        if !visionModels.contains(where: { $0.id == selectedVisionModelID }) {
+            selectedVisionModelID = (await registry.preferredModel(for: .visionAnalysis))?.id ?? ""
+        }
+    }
+
+    /// Fills the model pickers without interrupting the user when no key is stored yet.
+    private func preloadMomentModels() {
+        guard momentModels.isEmpty, !loadingMomentModels else { return }
+        loadingMomentModels = true
+        catalogJob = Task { [weak self] in
+            guard let self else { return }
+            let vault = OpenRouterSecretVault()
+            if (try? await Task.detached { try vault.hasKey() }.value) == true {
+                try? await refreshMomentModels()
+            }
+            loadingMomentModels = false
+        }
+    }
+
+    /// Chooses models and processes immediately; used after a quick YouTube import.
+    func autoProcess(project: ProjectRecord, source: PreparedSource, ingestor: SourceIngestor,
+                     cacheDirectory: URL, outputDirectory: URL,
+                     save: @escaping @MainActor (ProcessingResult) throws -> Void) {
+        catalogJob?.cancel()
+        processing = true
+        processingProgress = ProcessingProgress(stage: .preparing, fraction: 0, detail: "Choosing OpenRouter models")
+        message = nil
+        catalogJob = Task { [weak self] in
+            guard let self else { return }
+            do {
+                if momentModels.isEmpty { try await refreshMomentModels() }
+                try Task.checkCancellation()
+                processing = false
+                process(project: project, source: source, ingestor: ingestor,
+                        cacheDirectory: cacheDirectory, outputDirectory: outputDirectory, save: save)
+            } catch is CancellationError {
+                processing = false
+            } catch let error as LocalizedError {
+                processing = false
+                message = error.errorDescription ?? "Could not load OpenRouter models. Check the key in Settings."
+            } catch {
+                processing = false
+                message = "Could not load OpenRouter models. Check the key in Settings."
+            }
         }
     }
 
@@ -300,11 +352,14 @@ private final class WorkspacePlaybackController: ObservableObject {
                     }
                     try await registry.selectModel(id: vision.id, for: .visionAnalysis)
                 }
+                processingProgress = ProcessingProgress(stage: .preparing, fraction: 0,
+                    detail: "Preparing on-device speech recognition")
+                let speech = try await OnDeviceSpeech.backend()
                 let result = try await ProcessingCoordinator(ingestor: ingestor).run(
                     prepared: source, expectedAsset: project.mediaAsset,
                     configuration: project.configuration, cachedTranscript: project.transcript,
                     cacheDirectory: cacheDirectory, outputDirectory: outputDirectory,
-                    backend: AppleSpeechBackend(), modelID: modelID,
+                    backend: speech, modelID: modelID,
                     gateway: gateway, registry: registry) { [weak self] update in
                     Task { @MainActor [weak self] in
                         if self?.processingRunID == runID { self?.processingProgress = update }
@@ -419,6 +474,8 @@ struct WorkspacePlaybackView: View {
     let analysisCacheDirectory: URL?
     let exportsDirectory: URL?
     let ingestor: SourceIngestor
+    var autoProcess = false
+    var didStartAutoProcess: @MainActor () -> Void = { }
     let saveTranscript: @MainActor (Transcript) throws -> Void
     let saveProcessingResult: @MainActor (ProcessingResult) throws -> Void
     let reattachSource: @MainActor (URL) async throws -> Void
@@ -444,6 +501,14 @@ struct WorkspacePlaybackView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
+            if controller.processing {
+                processingBanner
+            } else if let message = controller.message, project.clips.isEmpty {
+                Label(message, systemImage: "info.circle")
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+            }
             ZStack {
                 RoundedRectangle(cornerRadius: 8).fill(.black)
                 if let source {
@@ -778,7 +843,15 @@ struct WorkspacePlaybackView: View {
             }
         }
         .frame(maxWidth: 1000, alignment: .leading)
-        .task(id: source?.fileURL) { controller.start(project: project, source: source) }
+        .task(id: source?.fileURL) {
+            controller.start(project: project, source: source)
+            if autoProcess, let source, let analysisCacheDirectory, let exportsDirectory {
+                didStartAutoProcess()
+                controller.autoProcess(project: project, source: source, ingestor: ingestor,
+                    cacheDirectory: analysisCacheDirectory, outputDirectory: exportsDirectory,
+                    save: saveProcessingResult)
+            }
+        }
         .onDisappear { reattachTask?.cancel(); controller.stop() }
         .fileImporter(isPresented: $showingSourcePicker,
             allowedContentTypes: [.movie, .mpeg4Movie, UTType(filenameExtension: "mkv") ?? .movie]) { result in
@@ -795,6 +868,28 @@ struct WorkspacePlaybackView: View {
     private static func timeLabel(_ time: MediaTime) -> String {
         let seconds = time.microseconds / 1_000_000
         return "\(seconds / 60):\(String(format: "%02d", seconds % 60))"
+    }
+
+    private var processingBanner: some View {
+        let stages = ProcessingStage.allCases.filter { $0 != .complete }
+        let current = controller.processingProgress?.stage ?? .preparing
+        let index = stages.firstIndex(of: current) ?? 0
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Making clips · step \(index + 1) of \(stages.count): \(current.rawValue)")
+                    .font(.headline)
+                Spacer()
+                Button("Cancel") { controller.cancelProcessing() }
+            }
+            ProgressView(value: (Double(index) + (controller.processingProgress?.fraction ?? 0)) / Double(stages.count))
+            if let detail = controller.processingProgress?.detail {
+                Text(detail).font(.callout).foregroundStyle(.secondary)
+            }
+            Text("Your clips appear here when rendering finishes.")
+                .font(.callout).foregroundStyle(.secondary)
+        }
+        .padding(14)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
     }
 
     private var analysisStage: String {

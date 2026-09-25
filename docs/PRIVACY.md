@@ -10,7 +10,7 @@ OpenRouter is the only external AI gateway. When the user starts an AI-assisted 
 
 ## Remote sources
 
-Direct video URL import is disabled because the dormant downloader cannot guarantee that the connected IP matches its preflight DNS validation. Authorized public YouTube imports may download the selected video and audio through the installed local `yt-dlp` tool. ClipHelm does not provide cookies or sign-in credentials to that tool, and it does not bypass DRM or private access controls. Temporary downloads are removed after failure/cancellation and eventually swept if abandoned.
+Direct video URL import is disabled because the dormant downloader cannot guarantee that the connected IP matches its preflight DNS validation. Authorized public YouTube imports may download the selected video and audio through `yt-dlp` (installed by ClipHelm from its official GitHub release, or an existing Homebrew copy). ClipHelm does not provide cookies or sign-in credentials to that tool, and it does not bypass DRM or private access controls. Temporary downloads are removed after failure/cancellation and eventually swept if abandoned.
 
 ## Credentials and diagnostics
 

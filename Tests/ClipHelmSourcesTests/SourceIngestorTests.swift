@@ -158,13 +158,11 @@ final class SourceIngestorTests: XCTestCase {
         #!/bin/sh
         [ "$1" = "--ignore-config" ] || exit 1
         case "$*" in *'https://www.youtube.com/watch?v=abcdefghijk'*) ;; *) exit 1;; esac
-        case "$*" in
-          *'--format bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]'*) ;;
-          *'--format best[ext=mp4]'*) ;;
-          *) exit 1;;
-        esac
-        cp \(quotedFixture) video.mp4
-        printf 'download:50%%\\n'
+        case "$*" in *'--format (bv*[ext=mp4][vcodec^=avc1][height<=1080],ba[ext=m4a])'*) ;; *) exit 1;; esac
+        case "$*" in *'--ffmpeg-location'*|*'--cookies'*) exit 1;; esac
+        cp \(quotedFixture) 137.mp4
+        printf '[cliphelm] avc1.640028 512 1024\\n'
+        printf 'unrelated line\\n'
         """
         try Data(script.utf8).write(to: executable)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
@@ -175,6 +173,64 @@ final class SourceIngestorTests: XCTestCase {
         let prepared = try await ingestor.prepare(descriptor) { observed.recordProgress($0) }
         XCTAssertEqual(prepared.asset.width, 64)
         XCTAssertTrue(observed.hasMeasuredProgress())
+        XCTAssertNotEqual(prepared.fileURL.deletingLastPathComponent(), root)
+    }
+
+    func testYouTubeFailureTextMapsToFixedMessages() throws {
+        XCTAssertEqual(YouTubeDownload.classify("ERROR: [youtube] x: Sign in to confirm you\u{2019}re not a bot."), .youtubeBotCheck)
+        XCTAssertEqual(YouTubeDownload.classify("ERROR: [youtube] x: Private video. Sign in if you've been granted access"), .youtubeUnavailable)
+        XCTAssertEqual(YouTubeDownload.classify("ERROR: Sign in to confirm your age."), .youtubeRestricted)
+        XCTAssertEqual(YouTubeDownload.classify("ERROR: [youtube] x: Requested format is not available."), .youtubeToolOutdated)
+        XCTAssertEqual(YouTubeDownload.classify("ERROR: Unable to download webpage: <urlopen error [Errno 8] nodename nor servname provided>"), .downloadFailed)
+        XCTAssertEqual(YouTubeDownload.classify("ERROR: This live event will begin in 3 hours."), .youtubeLive)
+        XCTAssertEqual(YouTubeDownload.classify(""), .youtubeUnavailable)
+    }
+
+    func testYouTubeProgressCombinesVideoAndAudioStreams() {
+        XCTAssertEqual(YouTubeDownload.fraction(forLine: "[cliphelm] avc1.640028 50 100"), 0.45)
+        XCTAssertEqual(YouTubeDownload.fraction(forLine: "[cliphelm] none 100 100"), 1)
+        XCTAssertNil(YouTubeDownload.fraction(forLine: "[cliphelm] avc1 NA NA"))
+        XCTAssertNil(YouTubeDownload.fraction(forLine: "download: 50%"))
+        let arguments = YouTubeDownload.arguments(videoID: "abcdefghijk")
+        let template = arguments[arguments.firstIndex(of: "--progress-template")! + 1]
+        XCTAssertTrue(template.hasPrefix("download:" + YouTubeDownload.progressPrefix))
+    }
+
+    func testDASHDurationUsesMovieHeaderAndMuxesSeparateStreams() async throws {
+        let fixture = try XCTUnwrap(Bundle.module.url(forResource: "valid", withExtension: "mp4"))
+        let header = try XCTUnwrap(YouTubeStreamMuxer.movieHeaderDuration(fixture))
+        XCTAssertGreaterThan(header.seconds, 0)
+        let root = FileManager.default.temporaryDirectory.appending(path: "ClipHelm-mux-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let output = root.appending(path: "combined.mp4")
+        try await YouTubeStreamMuxer.mux([fixture], to: output)
+        let muxed = try XCTUnwrap(YouTubeStreamMuxer.movieHeaderDuration(output))
+        XCTAssertEqual(muxed.seconds, header.seconds, accuracy: 0.05)
+        XCTAssertNil(YouTubeStreamMuxer.movieHeaderDuration(root.appending(path: "missing.mp4")))
+    }
+
+    func testYouTubeToolChecksumParsingAndTrustedHosts() {
+        let hash = String(repeating: "ab", count: 32)
+        let sums = "\(String(repeating: "cd", count: 32))  yt-dlp\n\(hash)  yt-dlp_macos\n\(String(repeating: "ef", count: 32))  yt-dlp_macos.zip\n"
+        XCTAssertEqual(YouTubeToolManager.checksum(for: "yt-dlp_macos", in: sums), hash)
+        XCTAssertNil(YouTubeToolManager.checksum(for: "yt-dlp_macos", in: "short  yt-dlp_macos"))
+        XCTAssertTrue(YouTubeToolManager.isTrustedHost(URL(string: "https://github.com/yt-dlp/yt-dlp/releases/latest")))
+        XCTAssertTrue(YouTubeToolManager.isTrustedHost(URL(string: "https://release-assets.githubusercontent.com/x")))
+        XCTAssertFalse(YouTubeToolManager.isTrustedHost(URL(string: "http://github.com/x")))
+        XCTAssertFalse(YouTubeToolManager.isTrustedHost(URL(string: "https://github.com.evil.example/x")))
+        XCTAssertFalse(YouTubeToolManager.isTrustedHost(URL(string: "https://evilgithubusercontent.com/x")))
+    }
+
+    func testOptInManagedYouTubeToolInstall() async throws {
+        guard let path = ProcessInfo.processInfo.environment["CLIPHELM_QA_TOOL_DIR"] else {
+            throw XCTSkip("Set CLIPHELM_QA_TOOL_DIR to install the verified upstream downloader")
+        }
+        let manager = YouTubeToolManager(directory: URL(fileURLWithPath: path, isDirectory: true))
+        let status = try await manager.install()
+        print("QA_YTDLP_VERSION=\(status.version ?? "unknown")")
+        XCTAssertEqual(status.origin, .managed)
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: manager.managedExecutable.path))
     }
 
     func testOptInAuthorizedYouTubeImport() async throws {

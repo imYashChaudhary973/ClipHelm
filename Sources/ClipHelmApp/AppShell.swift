@@ -11,6 +11,7 @@ struct AppShell: View {
     @State private var showsError = false
     @State private var sourceIngestor = SourceIngestor()
     @State private var sessionSources: [ProjectID: PreparedSource] = [:]
+    @State private var autoProcessProjects: Set<ProjectID> = []
 
     init(navigation: NavigationState, store: ProjectStore = ProjectStore()) {
         self.navigation = navigation
@@ -133,12 +134,12 @@ struct AppShell: View {
                     .font(.title3)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: 640, alignment: .leading)
-                Button("New Clip Project") {
+                QuickClipView(ingestor: sourceIngestor, onReady: startQuickProject)
+                    .padding(.top, 8)
+                Button("New Clip Project…") {
                     navigation.startProject()
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .padding(.top, 8)
+                .help("Choose a local file or customize format, framing, length, and captions")
 
                 Divider().padding(.vertical, 18)
                 HStack {
@@ -248,6 +249,8 @@ struct AppShell: View {
                 Divider()
                 OpenRouterSettingsView()
                 Divider()
+                YouTubeToolSettingsView()
+                Divider()
                 Text("Keyboard Shortcuts").font(.headline)
                 LabeledContent("New project", value: "⌘N")
                 LabeledContent("Home / Recent", value: "⌘1 / ⌘2")
@@ -280,6 +283,8 @@ struct AppShell: View {
                 analysisCacheDirectory: try? store.analysisCacheDirectory(for: project.id),
                 exportsDirectory: try? store.exportsDirectory(for: project.id),
                 ingestor: sourceIngestor,
+                autoProcess: autoProcessProjects.contains(project.id),
+                didStartAutoProcess: { autoProcessProjects.remove(project.id) },
                 saveTranscript: { try store.saveTranscript($0, for: project.id) },
                 saveProcessingResult: { try store.saveProcessingResult($0, for: project.id) },
                 reattachSource: { try await reattachSource($0, to: project) },
@@ -334,6 +339,25 @@ struct AppShell: View {
             navigation.openProject(project.id.rawValue)
         } catch {
             errorMessage = "Check the source and project name, then try again."
+            showsError = true
+        }
+    }
+
+    /// Creates a project from the saved clip preferences and starts processing it in the workspace.
+    private func startQuickProject(_ source: PreparedSource, link: String) {
+        var quick = draft
+        quick.sourceKind = .youtube
+        quick.remoteURL = link
+        quick.sourceName = ""
+        quick.title = source.title ?? "YouTube Clips"
+        quick.captionsEnabled = quick.captionsEnabled && source.hasAudio
+        do {
+            let project = try store.save(draft: quick, mediaAsset: source.asset)
+            sessionSources[project.id] = source
+            autoProcessProjects.insert(project.id)
+            navigation.openProject(project.id.rawValue)
+        } catch {
+            errorMessage = "The project could not be created. Check available disk space and try again."
             showsError = true
         }
     }

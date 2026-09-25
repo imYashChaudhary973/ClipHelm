@@ -38,8 +38,9 @@ public struct MomentEngine: Sendable {
     public let minimumQuality: Double
     public let maximumSemanticWindows: Int
 
-    public init(minimumQuality: Double = 0.55, maximumSemanticWindows: Int = 40) {
-        self.minimumQuality = minimumQuality.isFinite ? min(1, max(0, minimumQuality)) : 0.55
+    /// Live structured models rate complete, useful windows around 0.35–0.45 on this scale.
+    public init(minimumQuality: Double = 0.35, maximumSemanticWindows: Int = 40) {
+        self.minimumQuality = minimumQuality.isFinite ? min(1, max(0, minimumQuality)) : 0.35
         self.maximumSemanticWindows = max(1, maximumSemanticWindows)
     }
 
@@ -61,46 +62,49 @@ public struct MomentEngine: Sendable {
             try LocalMomentDiscovery.prepare(asset: asset, transcript: transcript,
                 analysis: analysis, lengths: selectedLengths, limit: maximumSemanticWindows)
         }
+        let total = prepared.candidates.count
+        let outcomes = try await evaluate(prepared.candidates, asset: asset, transcript: transcript,
+            analysis: analysis, hasSpeech: hasSpeech, modelID: modelID, gateway: gateway) { completed in
+            progress(.init(completed: completed, total: total))
+        }
         var ranked: [RankedMoment] = []
         var rejected = 0
-        for (index, candidate) in prepared.candidates.enumerated() {
-            try Task.checkCancellation()
-            let proposal: ClipProposal
-            if hasSpeech {
-                let prompt = LocalMomentDiscovery.prompt(for: candidate, asset: asset,
-                    transcript: transcript!, analysis: analysis)
-                let bytes = try await gateway.completeClipProposal(prompt: prompt, modelID: modelID!)
-                try Task.checkCancellation()
-                guard let decoded = LocalMomentDiscovery.decodeProposal(bytes),
-                      decoded.id == candidate.id, decoded.assetID == asset.id,
-                      decoded.range == candidate.range, decoded.score != nil,
-                      (try? decoded.validate(for: asset)) != nil else {
-                    rejected += 1
-                    progress(.init(completed: index + 1, total: prepared.candidates.count))
-                    continue
-                }
-                proposal = decoded
-            } else {
-                proposal = try ClipProposal(id: candidate.id, assetID: asset.id,
-                    range: candidate.range, title: "Visual moment",
-                    rationale: "Local scene and activity evidence; visual meaning needs review.",
-                    confidence: candidate.score.localEvidence, score: candidate.score)
+        var failures: [Error] = []
+        for (candidate, outcome) in zip(prepared.candidates, outcomes) {
+            switch outcome {
+            case .proposal(let proposal):
+                let score = try proposal.score!.withLocalEvidence(candidate.score.localEvidence)
+                let scored = try MomentCandidate(id: candidate.id, assetID: asset.id,
+                    range: candidate.range, signals: candidate.signals, score: score)
+                let quality = hasSpeech ? score.quality : score.localEvidence
+                ranked.append(.init(proposal: proposal, candidate: scored, quality: quality))
+            case .rejected: rejected += 1
+            case .failed(let error): rejected += 1; failures.append(error)
             }
-            let score = try proposal.score!.withLocalEvidence(candidate.score.localEvidence)
-            let scored = try MomentCandidate(id: candidate.id, assetID: asset.id,
-                range: candidate.range, signals: candidate.signals, score: score)
-            let quality = hasSpeech ? score.quality : score.localEvidence
-            ranked.append(.init(proposal: proposal, candidate: scored, quality: quality))
-            progress(.init(completed: index + 1, total: prepared.candidates.count))
         }
+        // A few failed requests only cost coverage; when every request failed, report why.
+        if total > 0, failures.count == total, let last = failures.last { throw last }
         let evaluated = ranked
-        let final = try await runOffMain {
+        var final = try await runOffMain {
             try LocalMomentDiscovery.finish(evaluated, boundaries: prepared.boundaries,
                 transcript: transcript, asset: asset, lengths: selectedLengths,
                 count: requestedCount, minimumQuality: minimumQuality)
         }
+        // Rather than returning nothing, offer the best few rated windows, clearly labeled.
+        var relaxed = false
+        if final.isEmpty, hasSpeech, !evaluated.isEmpty {
+            let floor = Self.fallbackQuality
+            final = try await runOffMain {
+                try LocalMomentDiscovery.finish(evaluated, boundaries: prepared.boundaries,
+                    transcript: transcript, asset: asset, lengths: selectedLengths,
+                    count: min(requestedCount ?? 3, 3), minimumQuality: floor, confidenceFloor: floor)
+            }
+            relaxed = !final.isEmpty
+        }
         let explanation: String?
-        if rejected == prepared.candidates.count && rejected > 0 {
+        if relaxed {
+            explanation = "No moment met the usual quality bar, so these are the best available picks. Review them before posting."
+        } else if rejected == prepared.candidates.count && rejected > 0 {
             explanation = "All model proposals failed validation. Choose another structured model or retry."
         } else if let requestedCount, final.count < requestedCount {
             explanation = "Found \(final.count) distinct moments above the quality threshold; fewer than the requested \(requestedCount)."
@@ -119,6 +123,79 @@ public struct MomentEngine: Sendable {
     }
 }
 
+private enum CandidateOutcome: Sendable {
+    case proposal(ClipProposal)
+    case rejected
+    case failed(Error)
+}
+
+extension MomentEngine {
+    static let concurrentRequests = 6
+    static let fallbackQuality = 0.2
+
+    private func evaluate(_ candidates: [MomentCandidate], asset: MediaAsset, transcript: Transcript?,
+                          analysis: AnalysisResult, hasSpeech: Bool, modelID: String?,
+                          gateway: any OpenRouterGateway,
+                          completed: @escaping @Sendable (Int) -> Void) async throws -> [CandidateOutcome] {
+        guard hasSpeech, let transcript, let modelID else {
+            return try candidates.map { candidate in
+                .proposal(try ClipProposal(id: candidate.id, assetID: asset.id,
+                    range: candidate.range, title: "Visual moment",
+                    rationale: "Local scene and activity evidence; visual meaning needs review.",
+                    confidence: candidate.score.localEvidence, score: candidate.score))
+            }
+        }
+        var outcomes = [CandidateOutcome](repeating: .rejected, count: candidates.count)
+        try await withThrowingTaskGroup(of: (Int, CandidateOutcome).self) { group in
+            var next = 0
+            var finished = 0
+            func submit() {
+                guard next < candidates.count else { return }
+                let index = next
+                let candidate = candidates[index]
+                next += 1
+                let prompt = LocalMomentDiscovery.prompt(for: candidate, asset: asset,
+                    transcript: transcript, analysis: analysis)
+                group.addTask {
+                    do {
+                        let bytes = try await Self.request(prompt: prompt, modelID: modelID, gateway: gateway)
+                        try Task.checkCancellation()
+                        guard let proposal = LocalMomentDiscovery.decodeProposal(bytes,
+                                  candidate: candidate, asset: asset) else { return (index, .rejected) }
+                        return (index, .proposal(proposal))
+                    } catch let error as OpenRouterGatewayError
+                                where error != .invalidKey && error != .insufficientCredits {
+                        return (index, .failed(error))
+                    }
+                }
+            }
+            for _ in 0..<Self.concurrentRequests { submit() }
+            while let (index, outcome) = try await group.next() {
+                outcomes[index] = outcome
+                finished += 1
+                completed(finished)
+                submit()
+            }
+        }
+        return outcomes
+    }
+
+    /// Retries transient OpenRouter failures with a short backoff.
+    private static func request(prompt: String, modelID: String,
+                                gateway: any OpenRouterGateway) async throws -> Data {
+        var attempt = 0
+        while true {
+            do {
+                return try await gateway.completeClipProposal(prompt: prompt, modelID: modelID)
+            } catch let error as OpenRouterGatewayError
+                        where [.rateLimited, .serviceUnavailable, .networkUnavailable].contains(error) && attempt < 2 {
+                attempt += 1
+                try await Task.sleep(for: .seconds(attempt * 3))
+            }
+        }
+    }
+}
+
 private func runOffMain<T: Sendable>(_ operation: @escaping @Sendable () throws -> T) async throws -> T {
     let job = Task.detached(priority: .utility) { try operation() }
     return try await withTaskCancellationHandler { try await job.value } onCancel: { job.cancel() }
@@ -130,17 +207,35 @@ private enum LocalMomentDiscovery {
         let candidates: [MomentCandidate]
     }
 
-    static func decodeProposal(_ bytes: Data) -> ClipProposal? {
+    private static let scoreKeys: Set<String> = ["hook", "standaloneCompleteness", "insight", "story",
+        "questionAnswerCompletion", "educationalValue", "interest", "contextDependency", "repetition"]
+
+    /// Accepts a rating for the candidate that was asked about. Identity and range come from the
+    /// local candidate; a response that restates them must match it exactly.
+    static func decodeProposal(_ bytes: Data, candidate: MomentCandidate, asset: MediaAsset) -> ClipProposal? {
+        let semantic: Set<String> = ["title", "rationale", "confidence", "score"]
         guard bytes.count <= 8_000,
-              let object = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
-              Set(object.keys) == ["id", "assetID", "range", "title", "rationale", "confidence", "score"],
-              let range = object["range"] as? [String: Any],
-              Set(range.keys) == ["start", "end"],
+              var object = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
               let score = object["score"] as? [String: Any],
-              Set(score.keys).subtracting(["localEvidence"]) == ["hook", "standaloneCompleteness",
-                  "insight", "story", "questionAnswerCompletion", "educationalValue", "interest",
-                  "contextDependency", "repetition"] else { return nil }
-        return try? JSONDecoder().decode(ClipProposal.self, from: bytes)
+              Set(score.keys).subtracting(["localEvidence"]) == scoreKeys else { return nil }
+        let keys = Set(object.keys)
+        if keys == semantic {
+            guard let template = try? ClipProposal(id: candidate.id, assetID: asset.id,
+                      range: candidate.range, title: "x", rationale: "", confidence: 0),
+                  let encoded = try? JSONEncoder().encode(template),
+                  let local = try? JSONSerialization.jsonObject(with: encoded) as? [String: Any] else { return nil }
+            for key in ["id", "assetID", "range"] { object[key] = local[key] }
+        } else {
+            guard keys == semantic.union(["id", "assetID", "range"]),
+                  let range = object["range"] as? [String: Any],
+                  Set(range.keys) == ["start", "end"] else { return nil }
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: object),
+              let proposal = try? JSONDecoder().decode(ClipProposal.self, from: data),
+              proposal.id == candidate.id, proposal.assetID == asset.id,
+              proposal.range == candidate.range, proposal.score != nil,
+              (try? proposal.validate(for: asset)) != nil else { return nil }
+        return proposal
     }
 
     static func prepare(asset: MediaAsset, transcript: Transcript?, analysis: AnalysisResult,
@@ -244,8 +339,9 @@ private enum LocalMomentDiscovery {
                 result.append(try MomentSignal(kind: .hook, range: first.range, strength: 0.65))
             }
         }
+        // A scene cut can end the window inside the next segment's first word; skip that word.
         for (previous, next) in zip(segments, segments.dropFirst())
-            where next.range.start >= range.start && next.range.start < range.end {
+            where next.words[0].range.start >= range.start && next.words[0].range.end <= range.end {
             if topicShift(previous.text, next.text) {
                 result.append(try MomentSignal(kind: .topicBoundary,
                     range: next.words[0].range, strength: 0.65))
@@ -315,7 +411,8 @@ private enum LocalMomentDiscovery {
         let kinds = analysis.classifications.filter {
             $0.range.start < candidate.range.end && candidate.range.start < $0.range.end
         }.map { $0.kind.rawValue }
-        return "Evaluate this locally selected candidate. Return one ClipProposal with the exact id, assetID and range shown. Rate each score dimension from 0 to 1; contextDependency and repetition are penalties. Be conservative when context is missing. No edit commands.\n" +
+        let seconds = Double(candidate.range.durationMicroseconds) / 1_000_000
+        return "Evaluate this locally selected candidate for a standalone short-form clip of \(Int(seconds.rounded())) seconds. Return a short catchy title, a one-sentence rationale, your confidence, and each score dimension from 0 to 1; contextDependency and repetition are penalties. Be conservative when context is missing. No edit commands.\n" +
             "id: \(candidate.id.uuidString)\nassetID: \(asset.id.rawValue.uuidString)\n" +
             "range: \(candidate.range.start.microseconds)..<\(candidate.range.end.microseconds) microseconds\n" +
             "local content types: \(kinds.joined(separator: ", "))\n" +
@@ -324,7 +421,7 @@ private enum LocalMomentDiscovery {
 
     static func finish(_ ranked: [RankedMoment], boundaries: [Int64], transcript: Transcript?,
                        asset: MediaAsset, lengths: [ClipLength], count: Int?,
-                       minimumQuality: Double) throws -> [RankedMoment] {
+                       minimumQuality: Double, confidenceFloor: Double? = nil) throws -> [RankedMoment] {
         let words = transcript?.words ?? []
         var selected: [RankedMoment] = []
         for item in ranked.sorted(by: { $0.quality > $1.quality }) {
@@ -344,15 +441,16 @@ private enum LocalMomentDiscovery {
             let duplicate = selected.contains { other in
                 let overlap = max(Int64(0), min(range.end.microseconds, other.proposal.range.end.microseconds) -
                     max(range.start.microseconds, other.proposal.range.start.microseconds))
-                let union = max(range.end.microseconds, other.proposal.range.end.microseconds) -
-                    min(range.start.microseconds, other.proposal.range.start.microseconds)
-                if Double(overlap) / Double(max(1, union)) >= 0.6 { return true }
+                // Two clips that share half of the shorter one would show viewers the same moment.
+                let shorter = min(range.durationMicroseconds, other.proposal.range.durationMicroseconds)
+                if Double(overlap) / Double(max(1, shorter)) >= 0.5 { return true }
                 let previous = tokens(in: other.proposal.range, words: words)
                 let similarity = Double(currentTokens.intersection(previous).count) /
                     Double(max(1, currentTokens.union(previous).count))
                 return !currentTokens.isEmpty && similarity >= 0.72
             }
-            let confidenceFloor = transcript?.hasMeaningfulSpeech == true ? 0.45 : minimumQuality
+            let confidenceFloor = confidenceFloor ??
+                (transcript?.hasMeaningfulSpeech == true ? 0.45 : minimumQuality)
             if !duplicate && item.quality >= minimumQuality && item.proposal.confidence >= confidenceFloor {
                 selected.append(item)
             }

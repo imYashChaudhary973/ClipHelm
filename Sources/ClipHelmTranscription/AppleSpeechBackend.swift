@@ -37,8 +37,9 @@ public final class AppleSpeechBackend: TranscriptionBackend {
                     if let result, result.isFinal {
                         do { completion.finish(.success(try Self.words(from: result, maximumTime: maximumTime))) }
                         catch { completion.finish(.failure(TranscriptEngineError.invalidWordTimings)) }
-                    } else if error != nil {
-                        completion.finish(.failure(TranscriptEngineError.unavailable))
+                    } else if let error {
+                        completion.finish(Self.isNoSpeech(error)
+                            ? .success([]) : .failure(TranscriptEngineError.unavailable))
                     }
                 }
                 completion.setTask(task)
@@ -71,6 +72,12 @@ public final class AppleSpeechBackend: TranscriptionBackend {
             }
         }
         return words
+    }
+
+    /// Music-only or silent chunks end with "No speech detected"; that chunk simply has no words.
+    nonisolated static func isNoSpeech(_ error: Error) -> Bool {
+        let error = error as NSError
+        return error.domain == "kAFAssistantErrorDomain" && error.code == 1110
     }
 
     nonisolated static func boundedRange(start: Int64, end: Int64,

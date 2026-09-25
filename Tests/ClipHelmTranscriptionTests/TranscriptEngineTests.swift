@@ -38,6 +38,26 @@ final class TranscriptEngineTests: XCTestCase {
         try XCTUnwrap(Bundle.module.url(forResource: name, withExtension: "mp4"))
     }
 
+    func testSpeechAnalyzerSplitsTimedRunsIntoBoundedWords() throws {
+        guard #available(macOS 26, *) else { throw XCTSkip("SpeechAnalyzer needs macOS 26") }
+        let words = try SpeechAnalyzerBackend.words(from: [
+            .init(text: " so so", start: 1.0, end: 1.4),
+            .init(text: "   ", start: 1.4, end: 1.5),
+            .init(text: "fly.", start: 49.9, end: 50.3),
+            .init(text: "late", start: 50.1, end: 50.4),
+        ], maximumTime: 50_000_000)
+        XCTAssertEqual(words.map(\.text), ["so", "so", "fly."])
+        XCTAssertEqual(words[0].range.start.microseconds, 1_000_000)
+        XCTAssertEqual(words[1].range.start.microseconds, 1_200_000)
+        XCTAssertEqual(words[2].range.end.microseconds, 50_000_000)
+    }
+
+    func testAppleSpeechTreatsOnlyNoSpeechErrorAsEmptyChunk() {
+        XCTAssertTrue(AppleSpeechBackend.isNoSpeech(NSError(domain: "kAFAssistantErrorDomain", code: 1110)))
+        XCTAssertFalse(AppleSpeechBackend.isNoSpeech(NSError(domain: "kAFAssistantErrorDomain", code: 1700)))
+        XCTAssertFalse(AppleSpeechBackend.isNoSpeech(NSError(domain: NSCocoaErrorDomain, code: 1110)))
+    }
+
     func testAppleSpeechBoundsSmallChunkOverrun() throws {
         let bounded = try AppleSpeechBackend.boundedRange(
             start: 49_800_000, end: 50_160_000, maximumTime: 50_000_000)
@@ -56,10 +76,18 @@ final class TranscriptEngineTests: XCTestCase {
         let source = URL(fileURLWithPath: path)
         let asset = try await MediaProbe().probe(fileURL: source, displayName: "QA speech").asset
         let started = Date()
+        let backend: any TranscriptionBackend = ProcessInfo.processInfo.environment["CLIPHELM_QA_LEGACY_SPEECH"] == "1"
+            ? AppleSpeechBackend() : try await OnDeviceSpeech.backend()
+        print("QA_SPEECH_BACKEND=\(type(of: backend))")
         let transcript = try await TranscriptEngine().transcribe(
-            sourceURL: source, asset: asset, backend: AppleSpeechBackend())
+            sourceURL: source, asset: asset, backend: backend)
         print("QA_ON_DEVICE_TRANSCRIPTION_SECONDS=\(Date().timeIntervalSince(started))")
         print("QA_TRANSCRIPT_WORDS=\(transcript.words.count)")
+        if let output = ProcessInfo.processInfo.environment["CLIPHELM_QA_TRANSCRIPT_OUT"] {
+            let rows = transcript.words.map { ["text": $0.text, "start": $0.range.start.microseconds,
+                                               "end": $0.range.end.microseconds] as [String: Any] }
+            try JSONSerialization.data(withJSONObject: rows).write(to: URL(fileURLWithPath: output))
+        }
         XCTAssertTrue(transcript.hasMeaningfulSpeech)
     }
 

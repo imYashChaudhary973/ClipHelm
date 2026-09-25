@@ -23,6 +23,10 @@ public struct OpenRouterModel: Identifiable, Equatable, Sendable {
     public let id: String
     public let name: String
     public let capabilities: Set<OpenRouterCapability>
+    /// Catalog publication time, used to prefer current model generations.
+    var created: Int = 0
+    /// USD per input token, when the catalog lists it.
+    var promptPrice: Double?
 
     public func supports(_ requirements: Set<OpenRouterCapability>) -> Bool {
         capabilities.isSuperset(of: requirements)
@@ -73,7 +77,9 @@ public actor OpenRouterModelRegistry {
             if let previous = merged[model.id] {
                 merged[model.id] = OpenRouterModel(
                     id: model.id, name: model.name,
-                    capabilities: previous.capabilities.union(model.capabilities)
+                    capabilities: previous.capabilities.union(model.capabilities),
+                    created: max(previous.created, model.created),
+                    promptPrice: previous.promptPrice ?? model.promptPrice
                 )
             } else {
                 merged[model.id] = model
@@ -104,6 +110,34 @@ public actor OpenRouterModelRegistry {
         return model
     }
 
+    /// The user's choice when it is still offered, otherwise a fast, low-cost current model.
+    public func preferredModel(for task: OpenRouterTask) -> OpenRouterModel? {
+        selectedModel(for: task) ?? recommendedModel(for: task)
+    }
+
+    public func recommendedModel(for task: OpenRouterTask) -> OpenRouterModel? {
+        Self.recommend(from: models(supporting: task.requiredCapabilities))
+    }
+
+    static func recommend(from models: [OpenRouterModel]) -> OpenRouterModel? {
+        let excluded = ["preview", "-exp", "lite", "nano", "image", "audio", "tts", "search",
+                        "online", "thinking", "guard", "embed"]
+        let pool = models.filter { model in
+            !model.id.contains(":") && !excluded.contains { model.id.lowercased().contains($0) }
+        }
+        let families: [(prefix: String, hint: String)] = [
+            ("z-ai/glm-", "flash"), ("google/gemini-", "flash"), ("openai/gpt-", "mini"), ("openai/gpt-", "luna"),
+            ("anthropic/claude-", "haiku"), ("deepseek/", "flash"), ("qwen/", "flash"),
+            ("mistralai/", "small"),
+        ]
+        for family in families {
+            let matches = pool.filter { $0.id.hasPrefix(family.prefix) && $0.id.contains(family.hint) }
+            if let newest = matches.max(by: { $0.created < $1.created }) { return newest }
+        }
+        let affordable = pool.filter { ($0.promptPrice ?? .infinity) <= 0.000_003 }
+        return affordable.max(by: { $0.created < $1.created }) ?? pool.first ?? models.first
+    }
+
     private static func decode(_ data: Data, filter: CatalogFilter) throws -> [OpenRouterModel] {
         guard let catalog = try? JSONDecoder().decode(Catalog.self, from: data),
               catalog.data.count <= 10_000 else {
@@ -121,13 +155,17 @@ public actor OpenRouterModelRegistry {
             var capabilities: Set<OpenRouterCapability> = []
             if inputs.contains("text") && outputs.contains("text") { capabilities.insert(.text) }
             if inputs.contains("image") && outputs.contains("text") { capabilities.insert(.vision) }
-            if (capabilities.contains(.text) || capabilities.contains(.vision)) && parameters.contains("response_format") {
+            // Strict JSON schemas need "structured_outputs"; "response_format" alone may mean JSON mode only.
+            if (capabilities.contains(.text) || capabilities.contains(.vision)) &&
+                parameters.contains("response_format") && parameters.contains("structured_outputs") {
                 capabilities.insert(.structuredOutput)
             }
             if filter == .transcription || outputs.contains("transcription") {
                 capabilities.insert(.transcription)
             }
-            return OpenRouterModel(id: entry.id, name: entry.name, capabilities: capabilities)
+            return OpenRouterModel(id: entry.id, name: entry.name, capabilities: capabilities,
+                                   created: entry.created ?? 0,
+                                   promptPrice: entry.promptPrice.flatMap(Double.init).flatMap { $0.isFinite && $0 >= 0 ? $0 : nil })
         }
     }
 }
@@ -141,8 +179,11 @@ private struct CatalogEntry: Decodable {
     let name: String
     let architecture: Architecture?
     let supportedParameters: [String]
+    let created: Int?
+    let promptPrice: String?
 
-    enum CodingKeys: String, CodingKey { case id, name, architecture, supportedParameters = "supported_parameters" }
+    enum CodingKeys: String, CodingKey { case id, name, architecture, created, pricing, supportedParameters = "supported_parameters" }
+    private struct Pricing: Decodable { let prompt: String? }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -150,6 +191,8 @@ private struct CatalogEntry: Decodable {
         name = try c.decode(String.self, forKey: .name)
         architecture = try? c.decode(Architecture.self, forKey: .architecture)
         supportedParameters = (try? c.decode([String].self, forKey: .supportedParameters)) ?? []
+        created = try? c.decode(Int.self, forKey: .created)
+        promptPrice = (try? c.decode(Pricing.self, forKey: .pricing))?.prompt
     }
 }
 

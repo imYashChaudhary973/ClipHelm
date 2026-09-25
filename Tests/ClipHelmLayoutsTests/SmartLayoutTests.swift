@@ -135,7 +135,7 @@ final class SmartLayoutTests: XCTestCase {
         let onDevice = try await ScreenContentDetector().detect(sourceURL: fixture, asset: source,
             analysis: local, range: full)
         XCTAssertEqual(onDevice.map(\.range), [full])
-        let catalog = Data(#"{"data":[{"id":"vendor/vision","name":"Vision","architecture":{"input_modalities":["text","image"],"output_modalities":["text"]},"supported_parameters":["response_format"]}]}"#.utf8)
+        let catalog = Data(#"{"data":[{"id":"vendor/vision","name":"Vision","architecture":{"input_modalities":["text","image"],"output_modalities":["text"]},"supported_parameters":["response_format","structured_outputs"]}]}"#.utf8)
         let gateway = MockOpenRouterGateway(catalogs: [.all: catalog, .transcription: Data(#"{"data":[]}"#.utf8)])
         let suite = "ClipHelm-Layout-\(UUID().uuidString)"
         defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }

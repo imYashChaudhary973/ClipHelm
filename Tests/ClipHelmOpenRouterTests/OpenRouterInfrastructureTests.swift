@@ -162,7 +162,7 @@ final class OpenRouterInfrastructureTests: XCTestCase {
     }
 
     func testRegistryDiscoversCapabilitiesAndPersistsModelSelections() async throws {
-        let all = Data(#"{"data":[{"id":"vendor/text","name":"Text","architecture":{"input_modalities":["text"],"output_modalities":["text"]},"supported_parameters":["response_format"]},{"id":"vendor/vision","name":"Vision","architecture":{"input_modalities":["text","image"],"output_modalities":["text"]},"supported_parameters":[]}] }"#.utf8)
+        let all = Data(#"{"data":[{"id":"vendor/text","name":"Text","architecture":{"input_modalities":["text"],"output_modalities":["text"]},"supported_parameters":["response_format","structured_outputs"]},{"id":"vendor/vision","name":"Vision","architecture":{"input_modalities":["text","image"],"output_modalities":["text"]},"supported_parameters":[]}] }"#.utf8)
         let transcription = Data(#"{"data":[{"id":"vendor/speech","name":"Speech","architecture":{"input_modalities":["audio"],"output_modalities":["transcription"]}}]}"#.utf8)
         let gateway = MockOpenRouterGateway(catalogs: [.all: all, .transcription: transcription])
         let suite = "ClipHelm-Models-\(UUID().uuidString)"
@@ -269,6 +269,41 @@ final class OpenRouterInfrastructureTests: XCTestCase {
         XCTAssertFalse(String(decoding: body, as: UTF8.self).contains("unit-test-token"))
     }
 
+    func testMessageContentStripsMarkdownFenceAndRejectsEmptyContent() throws {
+        let fenced = Data(#"{"choices":[{"message":{"content":"```json\n{\"a\":1}\n```"}}]}"#.utf8)
+        XCTAssertEqual(String(decoding: try LiveOpenRouterGateway.messageContent(fenced, limit: 100), as: UTF8.self), #"{"a":1}"#)
+        let empty = Data(#"{"choices":[{"message":{"content":"  "}}]}"#.utf8)
+        XCTAssertThrowsError(try LiveOpenRouterGateway.messageContent(empty, limit: 100))
+    }
+
+    func testUnsupportedChatModelMapsToActionableError() async throws {
+        StubURLProtocol.state.configure(status: 404, body: Data(#"{"error":{"message":"No endpoints found"}}"#.utf8))
+        do {
+            _ = try await stubbedGateway().completeClipProposal(prompt: "excerpt", modelID: "vendor/text")
+            XCTFail("Expected unsupported model")
+        } catch let error as OpenRouterGatewayError {
+            XCTAssertEqual(error, .modelUnsupported)
+        }
+    }
+
+    func testRecommendationPrefersCurrentFastModelsAndSkipsVariants() async throws {
+        let all = Data(#"{"data":[{"id":"aaa/first","name":"Alphabetical First","created":9,"pricing":{"prompt":"0.00001"},"architecture":{"input_modalities":["text"],"output_modalities":["text"]},"supported_parameters":["response_format","structured_outputs"]},{"id":"google/gemini-2-flash","name":"Old Flash","created":1,"architecture":{"input_modalities":["text","image"],"output_modalities":["text"]},"supported_parameters":["response_format","structured_outputs"]},{"id":"google/gemini-3-flash","name":"New Flash","created":5,"architecture":{"input_modalities":["text","image"],"output_modalities":["text"]},"supported_parameters":["response_format","structured_outputs"]},{"id":"google/gemini-3-flash:free","name":"Free","created":6,"architecture":{"input_modalities":["text"],"output_modalities":["text"]},"supported_parameters":["response_format","structured_outputs"]},{"id":"google/gemini-3-flash-lite","name":"Lite","created":7,"architecture":{"input_modalities":["text"],"output_modalities":["text"]},"supported_parameters":["response_format","structured_outputs"]},{"id":"vendor/json-mode","name":"JSON mode","architecture":{"input_modalities":["text"],"output_modalities":["text"]},"supported_parameters":["response_format"]}]}"#.utf8)
+        let gateway = MockOpenRouterGateway(catalogs: [.all: all, .transcription: Data(#"{"data":[]}"#.utf8)])
+        let suite = "ClipHelm-Recommend-\(UUID().uuidString)"
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        let registry = OpenRouterModelRegistry(gateway: gateway, defaultsSuiteName: suite)
+        try await registry.refresh()
+        let discovery = await registry.preferredModel(for: .clipDiscovery)
+        XCTAssertEqual(discovery?.id, "google/gemini-3-flash")
+        let vision = await registry.recommendedModel(for: .visionAnalysis)
+        XCTAssertEqual(vision?.id, "google/gemini-3-flash")
+        let structured = await registry.models(supporting: [.text, .structuredOutput])
+        XCTAssertFalse(structured.contains { $0.id == "vendor/json-mode" })
+        try await registry.selectModel(id: "aaa/first", for: .clipDiscovery)
+        let chosen = await registry.preferredModel(for: .clipDiscovery)
+        XCTAssertEqual(chosen?.id, "aaa/first")
+    }
+
     func testClipProposalUsesFixedEndpointStrictSchemaAndBoundedPrompt() async throws {
         StubURLProtocol.state.configure(status: 200,
             body: Data(#"{"choices":[{"message":{"content":"{\"title\":\"safe\"}"}}]}"#.utf8))
@@ -283,6 +318,9 @@ final class OpenRouterInfrastructureTests: XCTestCase {
         XCTAssertEqual(json["model"] as? String, "vendor/text")
         let format = try XCTUnwrap(json["response_format"] as? [String: Any])
         XCTAssertEqual(format["type"] as? String, "json_schema")
+        let schema = try XCTUnwrap((format["json_schema"] as? [String: Any])?["schema"] as? [String: Any])
+        XCTAssertEqual(Set(schema["required"] as? [String] ?? []), ["title", "rationale", "confidence", "score"])
+        XCTAssertEqual((json["provider"] as? [String: Bool])?["require_parameters"], true)
         XCTAssertFalse(String(decoding: body, as: UTF8.self).contains("unit-test-token"))
         do {
             _ = try await gateway.completeClipProposal(prompt: String(repeating: "x", count: 12_001), modelID: "vendor/text")
