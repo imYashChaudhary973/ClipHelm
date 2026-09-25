@@ -38,6 +38,12 @@ final class TranscriptEngineTests: XCTestCase {
         try XCTUnwrap(Bundle.module.url(forResource: name, withExtension: "mp4"))
     }
 
+    func testAppleSpeechTreatsOnlyNoSpeechErrorAsEmptyChunk() {
+        XCTAssertTrue(AppleSpeechBackend.isNoSpeech(NSError(domain: "kAFAssistantErrorDomain", code: 1110)))
+        XCTAssertFalse(AppleSpeechBackend.isNoSpeech(NSError(domain: "kAFAssistantErrorDomain", code: 1700)))
+        XCTAssertFalse(AppleSpeechBackend.isNoSpeech(NSError(domain: NSCocoaErrorDomain, code: 1110)))
+    }
+
     func testAppleSpeechBoundsSmallChunkOverrun() throws {
         let bounded = try AppleSpeechBackend.boundedRange(
             start: 49_800_000, end: 50_160_000, maximumTime: 50_000_000)
