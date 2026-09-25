@@ -1,6 +1,6 @@
 # Rights-cleared production QA protocol
 
-No representative rights-cleared long-video library has been provided in this checkout. Repository MP4s are tiny synthetic test fixtures; they cannot establish publishable clip quality or long-form performance. Do not import arbitrary downloaded videos into this library without permission.
+The initial publicly licensed test set is listed in [QA_ASSETS.md](QA_ASSETS.md). It covers a 33-minute 1080p lecture, a 12-minute 4K story, and an animated film. It does not yet cover every representative content type or full 4K long-form processing. Do not import arbitrary downloaded videos into this library without permission.
 
 ## Source manifest
 
@@ -16,4 +16,4 @@ For complete 1080p and 4K jobs, record wall time and CPU time per stage; peak an
 
 ## Current evidence
 
-The synthetic timeline and short-render measurements are in [QUALITY_BENCHMARK.md](QUALITY_BENCHMARK.md). No real-video scores or full-length profiling are recorded yet.
+The synthetic baseline is in [QUALITY_BENCHMARK.md](QUALITY_BENCHMARK.md). Partial real-media observations are in [QA_RESULTS.md](QA_RESULTS.md) and [PERFORMANCE_RESULTS.md](PERFORMANCE_RESULTS.md). Neither establishes publishable clip quality or complete long-form profiling yet.

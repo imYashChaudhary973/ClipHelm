@@ -28,7 +28,7 @@ public enum SourceIngestError: Error, LocalizedError, Equatable, Sendable {
         case .downloadFailed: "The video could not be downloaded. Check the link and try again."
         case .downloadTooLarge: "The video exceeds the 2 GB remote download limit."
         case .invalidMedia: "This file has no playable video track, or macOS cannot decode it."
-        case .youtubeToolUnavailable: "YouTube import needs yt-dlp installed on this Mac."
+        case .youtubeToolUnavailable: "YouTube import needs yt-dlp. Install it on this Mac, then retry."
         case .youtubeUnavailable: "This public YouTube video could not be imported. Private, protected, or sign-in-only videos are not supported."
         }
     }

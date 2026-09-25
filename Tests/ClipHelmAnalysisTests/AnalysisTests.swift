@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import XCTest
 import ClipHelmCore
 import ClipHelmMedia
@@ -109,5 +110,47 @@ final class AnalysisTests: XCTestCase {
             _ = try await job.value
             XCTFail("Cancellation must reach the worker task")
         } catch is CancellationError { }
+    }
+
+    func testOptInRealMediaAnalysisProfile() async throws {
+        guard let path = ProcessInfo.processInfo.environment["CLIPHELM_QA_ANALYSIS_SOURCE"] else {
+            throw XCTSkip("Set CLIPHELM_QA_ANALYSIS_SOURCE to a licensed local MP4 for production profiling")
+        }
+        let source = URL(fileURLWithPath: path)
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let probeStart = Date()
+        let metadata = try await MediaProbe().probe(fileURL: source, displayName: "QA source")
+        print("QA_PROBE_SECONDS=\(Date().timeIntervalSince(probeStart))")
+        print("QA_INPUT_BYTES=\(metadata.fileSize)")
+        let analysisStart = Date()
+        let result = try await AnalysisEngine().analyze(sourceURL: source, asset: metadata.asset,
+            cacheDirectory: root.appending(path: "Cache"))
+        print("QA_ANALYSIS_SECONDS=\(Date().timeIntervalSince(analysisStart))")
+        print("QA_SCENES=\(result.scenes.count) QA_SIGNALS=\(result.signals.count)")
+        let cacheURL = root.appending(path: "Cache/analysis-v1.json")
+        let cacheBytes = try cacheURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+        print("QA_CACHE_BYTES=\(cacheBytes)")
+        XCTAssertEqual(result.scenes.first?.range.start.microseconds, 0)
+        XCTAssertEqual(result.scenes.last?.range.end, metadata.asset.duration)
+        let reuseStart = Date()
+        let reused = try await AnalysisEngine().analyze(sourceURL: source, asset: metadata.asset,
+            cacheDirectory: root.appending(path: "Cache"))
+        print("QA_CACHE_REUSE_SECONDS=\(Date().timeIntervalSince(reuseStart))")
+        XCTAssertEqual(reused, result)
+        if ProcessInfo.processInfo.environment["CLIPHELM_QA_PROFILE_PROXY"] == "1" {
+            let proxyStart = Date()
+            let proxy = try await ProxyEngine().createIfUseful(sourceURL: source, metadata: metadata,
+                outputDirectory: root.appending(path: "Proxy"))
+            print("QA_PROXY_SECONDS=\(Date().timeIntervalSince(proxyStart))")
+            print("QA_PROXY_BYTES=\(try proxy?.fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0)")
+        }
+        var usage = rusage()
+        if getrusage(RUSAGE_SELF, &usage) == 0 {
+            print("QA_TEST_RUNNER_PEAK_RSS_BYTES=\(usage.ru_maxrss)")
+            let user = Double(usage.ru_utime.tv_sec) + Double(usage.ru_utime.tv_usec) / 1_000_000
+            let system = Double(usage.ru_stime.tv_sec) + Double(usage.ru_stime.tv_usec) / 1_000_000
+            print("QA_TEST_RUNNER_CPU_USER_SECONDS=\(user) QA_TEST_RUNNER_CPU_SYSTEM_SECONDS=\(system)")
+        }
     }
 }

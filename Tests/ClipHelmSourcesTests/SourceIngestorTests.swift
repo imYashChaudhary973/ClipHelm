@@ -158,6 +158,11 @@ final class SourceIngestorTests: XCTestCase {
         #!/bin/sh
         [ "$1" = "--ignore-config" ] || exit 1
         case "$*" in *'https://www.youtube.com/watch?v=abcdefghijk'*) ;; *) exit 1;; esac
+        case "$*" in
+          *'--format bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]'*) ;;
+          *'--format best[ext=mp4]'*) ;;
+          *) exit 1;;
+        esac
         cp \(quotedFixture) video.mp4
         printf 'download:50%%\\n'
         """
@@ -170,6 +175,26 @@ final class SourceIngestorTests: XCTestCase {
         let prepared = try await ingestor.prepare(descriptor) { observed.recordProgress($0) }
         XCTAssertEqual(prepared.asset.width, 64)
         XCTAssertTrue(observed.hasMeasuredProgress())
+    }
+
+    func testOptInAuthorizedYouTubeImport() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let raw = environment["CLIPHELM_QA_YOUTUBE_URL"],
+              let executablePath = environment["CLIPHELM_QA_YTDLP_BIN"] else {
+            throw XCTSkip("Set CLIPHELM_QA_YOUTUBE_URL and CLIPHELM_QA_YTDLP_BIN for live authorized import")
+        }
+        let root = FileManager.default.temporaryDirectory.appending(path: "ClipHelm-youtube-qa-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let descriptor = try SourceDescriptor(remoteURL: raw, youtube: true, authorized: true)
+        let ingestor = SourceIngestor(temporaryDirectory: root,
+            youtubeExecutable: URL(fileURLWithPath: executablePath))
+        let started = Date()
+        let prepared = try await ingestor.prepare(descriptor)
+        print("QA_YOUTUBE_DOWNLOAD_SECONDS=\(Date().timeIntervalSince(started))")
+        print("QA_YOUTUBE_DIMENSIONS=\(prepared.asset.width)x\(prepared.asset.height)")
+        print("QA_YOUTUBE_DURATION_SECONDS=\(Double(prepared.asset.duration.microseconds) / 1_000_000)")
+        XCTAssertGreaterThan(prepared.asset.duration.microseconds, 0)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: prepared.fileURL.path))
     }
 
 #if DEBUG

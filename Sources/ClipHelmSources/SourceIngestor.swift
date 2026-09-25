@@ -345,15 +345,27 @@ public actor SourceIngestor {
         control.process.environment = ["HOME": jobDirectory.path,
                                        "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
                                        "TMPDIR": jobDirectory.path]
-        control.process.arguments = [
+        let ffmpeg = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]
+            .map { URL(fileURLWithPath: $0) }
+            .first { FileManager.default.isExecutableFile(atPath: $0.path) }
+        var arguments = [
             "--ignore-config", "--no-playlist", "--no-cache-dir", "--no-plugin-dirs",
             "--no-remote-components", "--no-colors", "--newline",
-            "--max-filesize", "2G", "--format", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]",
-            "--merge-output-format", "mp4",
+            "--max-filesize", "2G"
+        ]
+        if let ffmpeg {
+            arguments += ["--ffmpeg-location", ffmpeg.path, "--format",
+                          "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]",
+                          "--merge-output-format", "mp4"]
+        } else {
+            arguments += ["--format", "best[ext=mp4]"]
+        }
+        arguments += [
             "--output", "video.%(ext)s",
             "--progress-template", "download:%(progress._percent_str)s",
             "https://www.youtube.com/watch?v=\(videoID)"
         ]
+        control.process.arguments = arguments
         control.process.standardOutput = control.output
         control.process.standardError = FileHandle.nullDevice
         progress(SourceProgress(stage: .downloading))

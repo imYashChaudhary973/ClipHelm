@@ -18,8 +18,18 @@ private struct UnusedBackend: TranscriptionBackend {
 private final class ProgressLog: @unchecked Sendable {
     private let lock = NSLock()
     private var values: [ProcessingProgress] = []
-    func append(_ value: ProcessingProgress) { lock.lock(); values.append(value); lock.unlock() }
+    private var transitions: [(ProcessingStage, Date)] = []
+    func append(_ value: ProcessingProgress) {
+        lock.lock()
+        values.append(value)
+        if transitions.last?.0 != value.stage { transitions.append((value.stage, Date())) }
+        lock.unlock()
+    }
     var stages: [ProcessingStage] { lock.lock(); defer { lock.unlock() }; return values.map(\.stage) }
+    var stageDurations: [(ProcessingStage, TimeInterval)] {
+        lock.lock(); defer { lock.unlock() }
+        return zip(transitions, transitions.dropFirst()).map { ($0.0.0, $0.1.1.timeIntervalSince($0.0.1)) }
+    }
 }
 
 final class ProcessingTests: XCTestCase {
@@ -28,7 +38,9 @@ final class ProcessingTests: XCTestCase {
     }
 
     func testSilentSourceRunsAllStagesAndRendersWithoutNetwork() async throws {
-        let file = try XCTUnwrap(Bundle.module.url(forResource: "silent-motion", withExtension: "mp4"))
+        let qaSource = ProcessInfo.processInfo.environment["CLIPHELM_QA_SILENT_SOURCE"]
+        let file = try XCTUnwrap(qaSource.map { URL(fileURLWithPath: $0) } ??
+            Bundle.module.url(forResource: "silent-motion", withExtension: "mp4"))
         let ingestor = SourceIngestor()
         let source = try await ingestor.prepare(SourceDescriptor(localFile: file))
         let configuration = try ClipConfiguration(outputFormat: .vertical,
@@ -42,6 +54,7 @@ final class ProcessingTests: XCTestCase {
         let gateway = MockOpenRouterGateway()
         let registry = OpenRouterModelRegistry(gateway: gateway)
         let log = ProgressLog()
+        let started = Date()
         let result = try await ProcessingCoordinator(ingestor: ingestor,
             momentEngine: MomentEngine(minimumQuality: 0)).run(prepared: source,
                 expectedAsset: source.asset, configuration: configuration,
@@ -49,6 +62,15 @@ final class ProcessingTests: XCTestCase {
                 outputDirectory: directory.appending(path: "Exports"),
                 backend: UnusedBackend(), modelID: nil, gateway: gateway,
                 registry: registry) { log.append($0) }
+        if qaSource != nil {
+            print("QA_PROCESSING_WALL_SECONDS=\(Date().timeIntervalSince(started))")
+            for (stage, duration) in log.stageDurations {
+                print("QA_STAGE_\(stage.rawValue)=\(duration)")
+            }
+            for clip in result.clips {
+                print("QA_CLIP_SOURCE_RANGE=\(clip.proposal.range.start.microseconds)...\(clip.proposal.range.end.microseconds)")
+            }
+        }
         XCTAssertEqual(result.clips.count, 1)
         XCTAssertFalse(result.transcript.hasMeaningfulSpeech)
         XCTAssertTrue(FileManager.default.fileExists(atPath: result.clips[0].previewURL.path))
