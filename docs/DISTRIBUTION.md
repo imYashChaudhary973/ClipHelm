@@ -1,13 +1,13 @@
 # Direct macOS distribution
 
-This is the intended Developer ID path for **direct distribution outside the Mac App Store**. It has not completed a notarized release: this Mac currently reports zero valid code-signing identities. The existing bundle identifier is `com.cliphelm.app` and the minimum macOS version is 14.0; confirm ownership of the identifier in the Apple Developer team before signing.
+This is the intended Developer ID path for **direct distribution outside the Mac App Store**. A local Developer ID-signed Release build has passed `codesign --verify` with hardened runtime and a secure timestamp. It has **not** been notarized: the `cliphelm-release` notarytool Keychain profile is absent. Gatekeeper rejects this intermediate build as `Unnotarized Developer ID`. The bundle identifier is `com.cliphelm.app` and the minimum macOS version is 14.0; confirm ownership of the identifier in the Apple Developer team before external distribution.
 
 Apple requires a Developer ID Application signature, hardened runtime, and a secure timestamp for new notarization submissions. App Sandbox is optional for direct distribution; this build currently does not enable it. Do not add broad sandbox or hardened-runtime exception entitlements to make a failed workflow pass. Assess file access, subprocesses, Keychain, Speech, and networking on the final signed build. See [Apple's notarization requirements](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution) and [distribution preparation](https://developer.apple.com/documentation/xcode/preparing-your-app-for-distribution).
 
 ## Prerequisites
 
 1. Install Xcode and Command Line Tools. Verify `xcodebuild -version` and `xcrun notarytool --help`.
-2. Install a valid **Developer ID Application** certificate in the signing Keychain. Check `security find-identity -v -p codesigning`. Keep its private key out of Git and build logs.
+2. Install a valid **Developer ID Application** certificate in the signing Keychain. Check `security find-identity -v -p codesigning` outside restricted build sandboxes. This Mac has a valid identity; keep its private key out of Git and build logs.
 3. Store notarization credentials in macOS Keychain with `xcrun notarytool store-credentials cliphelm-release` and the appropriate interactive authentication options. Never pass an app-specific password or API private key as a shell argument.
 4. Confirm `com.cliphelm.app` belongs to the intended team and set a release version/build number in `Resources/Info.plist`.
 

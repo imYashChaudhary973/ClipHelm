@@ -16,9 +16,10 @@ Status on 2026-09-25: **NOT RELEASE READY**. Every check is `PASS`, `FAIL`, `BLO
 | Performance | Long-form 4K CPU/GPU/RSS/disk/stage profile | BLOCKED | Cleared 4K long source required; record [PERFORMANCE_RESULTS.md](PERFORMANCE_RESULTS.md). |
 | Reliability | Automated cancellation, save, export-capacity, network-error regressions | PASS | Full suite rerun on 2026-09-25: 103 passed, one optional benchmark skipped, zero failures. Release-config source tests: 4 passed. |
 | Reliability | Live force quit, disk full, network interruption and recovery | BLOCKED | Controlled QA Mac, cleared source and live run required; record [RELIABILITY_RESULTS.md](RELIABILITY_RESULTS.md). |
-| Distribution | Release build and ad hoc local signature | PASS | `scripts/build-app.sh release` and `codesign --verify --deep --strict` passed on 2026-09-25; signature flags include `runtime`, with no Team ID. Local-build evidence only. |
-| Distribution | Developer ID identity available on this Mac | BLOCKED | `security find-identity -v -p codesigning` returned **0 valid identities** on 2026-09-25. Install approved identity. |
-| Distribution | Hardened runtime, Developer ID signing and notarization | BLOCKED | [DISTRIBUTION.md](DISTRIBUTION.md) and `scripts/distribute-app.sh` prepare the path; run with installed identity and Keychain notary profile. |
+| Distribution | Developer ID-signed Release build with hardened runtime and timestamp | PASS | Built on 2026-09-25; `codesign --verify --deep --strict` passed, Team ID `8QSM298XJ2`, runtime flag and secure timestamp present. |
+| Distribution | Notarization Keychain profile available | BLOCKED | `xcrun notarytool history --keychain-profile cliphelm-release` found no item. Supply an existing profile name or store credentials in Keychain; do not put secrets in Git or arguments. |
+| Distribution | Notarization accepted and ticket stapled | BLOCKED | [DISTRIBUTION.md](DISTRIBUTION.md) and `scripts/distribute-app.sh` prepare the path; submit using the Keychain notary profile, require Accepted status, staple and validate. |
+| Distribution | Current signed candidate passes Gatekeeper | FAIL | `spctl -a -t exec -vv` rejected it as `Unnotarized Developer ID`. Retest after notarization and stapling. |
 | Distribution | Stapling, Gatekeeper, clean install and distributed-build workflow | BLOCKED | Run on final accepted notarized artifact in clean environment; test Keychain, media access, OpenRouter, render, export, relaunch. |
 
 The detailed synthetic baseline remains in [QUALITY_BENCHMARK.md](QUALITY_BENCHMARK.md). It does not satisfy the quality or performance gates above.
