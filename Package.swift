@@ -14,6 +14,8 @@ let package = Package(
         .library(name: "ClipHelmAnalysis", targets: ["ClipHelmAnalysis"]),
         .library(name: "ClipHelmMoments", targets: ["ClipHelmMoments"]),
         .library(name: "ClipHelmEditing", targets: ["ClipHelmEditing"]),
+        .library(name: "ClipHelmFraming", targets: ["ClipHelmFraming"]),
+        .library(name: "ClipHelmFramingVision", targets: ["ClipHelmFramingVision"]),
         .executable(name: "ClipHelmApp", targets: ["ClipHelmApp"]),
     ],
     targets: [
@@ -24,7 +26,9 @@ let package = Package(
         .target(name: "ClipHelmTranscription", dependencies: ["ClipHelmCore", "ClipHelmMedia", "ClipHelmOpenRouter"]),
         .target(name: "ClipHelmAnalysis", dependencies: ["ClipHelmCore", "ClipHelmMedia"]),
         .target(name: "ClipHelmMoments", dependencies: ["ClipHelmCore", "ClipHelmAnalysis", "ClipHelmOpenRouter"]),
-        .target(name: "ClipHelmEditing", dependencies: ["ClipHelmCore", "ClipHelmAnalysis"]),
+        .target(name: "ClipHelmFraming", dependencies: ["ClipHelmCore", "ClipHelmAnalysis"]),
+        .target(name: "ClipHelmFramingVision", dependencies: ["ClipHelmCore", "ClipHelmAnalysis", "ClipHelmFraming", "ClipHelmMedia", "ClipHelmOpenRouter"]),
+        .target(name: "ClipHelmEditing", dependencies: ["ClipHelmCore", "ClipHelmAnalysis", "ClipHelmFraming"]),
         .target(name: "ClipHelmSources", dependencies: ["ClipHelmCore", "ClipHelmMedia"]),
         .executableTarget(name: "ClipHelmApp", dependencies: ["ClipHelmCore", "ClipHelmSecurity", "ClipHelmOpenRouter", "ClipHelmSources", "ClipHelmMedia", "ClipHelmTranscription", "ClipHelmAnalysis", "ClipHelmMoments"]),
         .testTarget(name: "ClipHelmCoreTests", dependencies: ["ClipHelmCore"]),
@@ -40,6 +44,7 @@ let package = Package(
                     resources: [.process("Fixtures")]),
         .testTarget(name: "ClipHelmMomentsTests", dependencies: ["ClipHelmMoments", "ClipHelmCore", "ClipHelmAnalysis", "ClipHelmOpenRouter"]),
         .testTarget(name: "ClipHelmEditingTests", dependencies: ["ClipHelmEditing", "ClipHelmCore", "ClipHelmAnalysis"]),
+        .testTarget(name: "ClipHelmFramingTests", dependencies: ["ClipHelmFraming", "ClipHelmFramingVision", "ClipHelmCore", "ClipHelmAnalysis", "ClipHelmMedia", "ClipHelmOpenRouter"]),
         .testTarget(name: "ClipHelmAppTests", dependencies: ["ClipHelmApp", "ClipHelmCore"]),
     ]
 )

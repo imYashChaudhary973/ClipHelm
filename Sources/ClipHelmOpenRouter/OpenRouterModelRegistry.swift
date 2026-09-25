@@ -12,7 +12,7 @@ public enum OpenRouterTask: String, CaseIterable, Hashable, Sendable {
         switch self {
         case .transcriptReasoning, .clipRanking: [.text]
         case .clipDiscovery: [.text, .structuredOutput]
-        case .visionAnalysis: [.vision]
+        case .visionAnalysis: [.vision, .structuredOutput]
         case .structuredClassification: [.text, .structuredOutput]
         case .transcription: [.transcription]
         }
@@ -121,7 +121,7 @@ public actor OpenRouterModelRegistry {
             var capabilities: Set<OpenRouterCapability> = []
             if inputs.contains("text") && outputs.contains("text") { capabilities.insert(.text) }
             if inputs.contains("image") && outputs.contains("text") { capabilities.insert(.vision) }
-            if capabilities.contains(.text) && parameters.contains("response_format") {
+            if (capabilities.contains(.text) || capabilities.contains(.vision)) && parameters.contains("response_format") {
                 capabilities.insert(.structuredOutput)
             }
             if filter == .transcription || outputs.contains("transcription") {

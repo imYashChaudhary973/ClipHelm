@@ -1,6 +1,7 @@
 import Foundation
 import ClipHelmCore
 import ClipHelmAnalysis
+import ClipHelmFraming
 
 /// Converts validated suggestions and local evidence into renderer-independent decisions.
 public struct ClipPlanner: Sendable {
@@ -8,7 +9,8 @@ public struct ClipPlanner: Sendable {
 
     public func plan(clipID: ClipID, proposal: ClipProposal, configuration: ClipConfiguration,
                      asset: MediaAsset, analysis: AnalysisResult, intent: AIEditIntent? = nil,
-                     transcript: Transcript? = nil) throws -> ClipHelmEditSpec {
+                     transcript: Transcript? = nil,
+                     visionHints: [ContentClassification] = []) throws -> ClipHelmEditSpec {
         try proposal.validate(for: asset)
         try analysis.validate(for: asset)
         try intent?.validate(for: proposal)
@@ -35,10 +37,26 @@ public struct ClipPlanner: Sendable {
         }
         let segments = retained.map(EditSegment.init(sourceRange:))
         let layout = LayoutMode(framing: configuration.framingMode)
-        let crops = try layout == .fill
-            ? segments.map { try cropPath(for: $0.sourceRange, asset: asset,
-                                          format: configuration.outputFormat, analysis: analysis) }
-            : []
+        let crops: [CropPath]
+        switch configuration.framingMode {
+        case .smartAuto:
+            crops = try segments.flatMap { try SmartAutoFrameEngine().frame(
+                range: $0.sourceRange, asset: asset, format: configuration.outputFormat,
+                analysis: analysis, visionHints: visionHints).paths }
+        case .fullFrame:
+            let sourceAspect = Double(asset.width) / Double(asset.height)
+            let targetAspect = Double(configuration.outputFormat.width) / Double(configuration.outputFormat.height)
+            let width = min(1, targetAspect / sourceAspect)
+            let height = min(1, sourceAspect / targetAspect)
+            let rect = try NormalizedRect(x: (1 - width) / 2, y: (1 - height) / 2,
+                                          width: width, height: height)
+            crops = try segments.map { segment in
+                try CropPath(sourceRange: segment.sourceRange,
+                    keyframes: [CropKeyframe(sourceTime: segment.sourceRange.start, rect: rect)])
+            }
+        case .classicFullFrame, .blurred:
+            crops = []
+        }
         let captions = try captionTrack(transcript: transcript, segments: segments,
                                         configuration: configuration)
         let spec = try ClipHelmEditSpec(clipID: clipID, sourceAssetID: asset.id, segments: segments,
@@ -84,47 +102,6 @@ public struct ClipPlanner: Sendable {
             }
         }
         return cuts.sorted { $0.start < $1.start }
-    }
-
-    private func cropPath(for range: MediaTimeRange, asset: MediaAsset,
-                          format: OutputFormat, analysis: AnalysisResult) throws -> CropPath {
-        let observations = analysis.subjectTracks
-            .map { track in track.observations.filter { range.start <= $0.time && $0.time < range.end } }
-            .max { $0.count < $1.count } ?? []
-        func center(_ observation: SubjectObservation) -> (Double, Double) {
-            (observation.bounds.x + observation.bounds.width / 2,
-             observation.bounds.y + observation.bounds.height / 2)
-        }
-        let first = observations.first.map(center)
-        let last = observations.last.map(center)
-        let coverage = observations.count >= 2 &&
-            observations.first!.time.microseconds - range.start.microseconds <= range.durationMicroseconds / 6 &&
-            range.end.microseconds - observations.last!.time.microseconds <= range.durationMicroseconds / 6
-        if coverage, let first, let last,
-           hypot(first.0 - last.0, first.1 - last.1) >= 0.08 {
-            return try CropPath(sourceRange: range, keyframes: [
-                CropKeyframe(sourceTime: range.start,
-                             rect: try cropRect(center: first, asset: asset, format: format)),
-                CropKeyframe(sourceTime: range.end,
-                             rect: try cropRect(center: last, asset: asset, format: format)),
-            ])
-        }
-        let middle = observations.isEmpty ? (0.5, 0.5) : center(observations[observations.count / 2])
-        return try CropPath(sourceRange: range, keyframes: [
-            CropKeyframe(sourceTime: range.start,
-                         rect: cropRect(center: middle, asset: asset, format: format)),
-        ])
-    }
-
-    private func cropRect(center: (Double, Double), asset: MediaAsset,
-                          format: OutputFormat) throws -> NormalizedRect {
-        let sourceAspect = Double(asset.width) / Double(asset.height)
-        let targetAspect = Double(format.width) / Double(format.height)
-        let width = min(1, targetAspect / sourceAspect)
-        let height = min(1, sourceAspect / targetAspect)
-        return try NormalizedRect(x: max(0, min(1 - width, center.0 - width / 2)),
-                                  y: max(0, min(1 - height, center.1 - height / 2)),
-                                  width: width, height: height)
     }
 
     private func captionTrack(transcript: Transcript?, segments: [EditSegment],

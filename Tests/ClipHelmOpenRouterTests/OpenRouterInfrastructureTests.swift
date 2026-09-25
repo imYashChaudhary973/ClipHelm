@@ -180,6 +180,28 @@ final class OpenRouterInfrastructureTests: XCTestCase {
         }
     }
 
+    func testVisionUsesFixedEndpointAndOnlyBoundedJPEGInputs() async throws {
+        let response = Data(#"{"choices":[{"message":{"content":"{\"kind\":\"screenShare\",\"confidence\":0.9}"}}]}"#.utf8)
+        StubURLProtocol.state.configure(status: 200, body: response)
+        let gateway = stubbedGateway()
+        let image = Data([0xFF, 0xD8, 0xFF, 0xD9])
+        let result = try await gateway.classifyFramingFrames([image], modelID: "vendor/vision")
+        XCTAssertEqual(String(decoding: result, as: UTF8.self), #"{"kind":"screenShare","confidence":0.9}"#)
+        let request = try XCTUnwrap(StubURLProtocol.state.lastRequest())
+        XCTAssertEqual(request.url?.absoluteString, "https://openrouter.ai/api/v1/chat/completions")
+        let body = try XCTUnwrap(StubURLProtocol.state.lastRequestBody())
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(json["model"] as? String, "vendor/vision")
+        XCTAssertEqual((json["provider"] as? [String: Bool])?["require_parameters"], true)
+        XCTAssertFalse(String(decoding: body, as: UTF8.self).contains("unit-test-token"))
+        do {
+            _ = try await gateway.classifyFramingFrames([Data(repeating: 0, count: 400_000)], modelID: "vendor/vision")
+            XCTFail("Oversized or invalid frame must fail before network")
+        } catch let error as OpenRouterGatewayError {
+            XCTAssertEqual(error, .invalidResponse)
+        }
+    }
+
     func testClipProposalUsesFixedEndpointStrictSchemaAndBoundedPrompt() async throws {
         StubURLProtocol.state.configure(status: 200,
             body: Data(#"{"choices":[{"message":{"content":"{\"title\":\"safe\"}"}}]}"#.utf8))

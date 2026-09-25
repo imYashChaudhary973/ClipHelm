@@ -4,7 +4,7 @@ ClipHelm is a local-first native macOS editor. Its own pipeline owns media, time
 
 ## Module boundaries
 
-Dependencies point downward. `ClipHelmCore`, `ClipHelmSecurity`, `ClipHelmOpenRouter`, `ClipHelmMedia`, `ClipHelmSources`, `ClipHelmTranscription`, `ClipHelmAnalysis`, `ClipHelmMoments`, `ClipHelmEditing`, and the `ClipHelmApp` shell are implemented targets. The remaining modules are design boundaries for later phases.
+Dependencies point downward. `ClipHelmCore`, `ClipHelmSecurity`, `ClipHelmOpenRouter`, `ClipHelmMedia`, `ClipHelmSources`, `ClipHelmTranscription`, `ClipHelmAnalysis`, `ClipHelmMoments`, `ClipHelmFraming`, `ClipHelmFramingVision`, `ClipHelmEditing`, and the `ClipHelmApp` shell are implemented targets. The remaining modules are design boundaries for later phases.
 
 | Module | Owns | May depend on |
 | --- | --- | --- |
@@ -18,11 +18,12 @@ Dependencies point downward. `ClipHelmCore`, `ClipHelmSecurity`, `ClipHelmOpenRo
 | Analysis | Local scene, subject, audio activity and pause evidence | Core, Media |
 | Moments | Hierarchical local candidates, bounded semantic scoring, ranking and deduplication | Core, Analysis, OpenRouter |
 | Clipping | `ClipPlanner`: validates proposals/intents and selects source intervals | Core, Analysis |
-| Framing | Tracking and crop trajectories for each shot | Core, Analysis |
+| Framing | Local subject/content focus and smooth crop trajectories per scene | Core, Analysis |
+| Framing Vision | Optional uncertain-shot classification on selected JPEG frames | Core, Analysis, Framing, Media, OpenRouter |
 | Layouts | Canvas placement for full-frame and blurred compositions | Core, Framing |
 | Pacing | Dead-air, pause and filler cut proposals | Core, Transcription, Analysis |
 | Captions | Word segmentation and style timing | Core, Transcription |
-| Editing | Implemented `ClipHelmEditing`: deterministic planning, source/edited timeline mapping, spec validation, typed operations, and in-memory undo/redo | Core, Analysis |
+| Editing | Implemented `ClipHelmEditing`: deterministic planning, source/edited timeline mapping, spec validation, typed operations, and in-memory undo/redo | Core, Analysis, Framing |
 | Rendering | Preview/export compiler, AVFoundation/VideoToolbox; optional FFmpeg adapter | Core, Media, Editing |
 | SharedUI | Reusable SwiftUI controls and presentation | Core, SwiftUI |
 
@@ -43,6 +44,10 @@ Phase 7 `MomentEngine` partitions transcript and analysis evidence into source-t
 Phase 8 extends the guided project setup with destination, framing, smart editing, pacing, multiple lengths, count target, sound, and caption effects. The SwiftUI draft converts to one validated `ClipConfiguration` at save time. The project manifest stores that core value; the clipping engine has no dependency on SwiftUI or draft state. A source without an audio track starts with captions off, and an empty transcript clears caption choices. Sound normalization and editing toggles are stored preferences for later processing phases, not active processing in setup.
 
 Phase 9 adds `ClipHelmEditing` with no provider dependency. `ClipPlanner` combines a typed proposal and configuration with validated local analysis, then emits schema-versioned `ClipHelmEditSpec`. Source-time trim/remove segments, crop paths, layout, audio operation, and caption cues are validated before use. `EditTimeline` maps retained source intervals to edited time. `EditHistory` provides typed edits with in-memory undo/redo. The app does not render or persist edit history in this phase.
+
+Phase 10 adds a provider-free `SmartAutoFrameEngine`. It intersects retained ranges with scene boundaries, scores local subject tracks using persistence, size, and face evidence, gives screen content priority for demos and screen shares, and emits `CropPath` keyframes in source time. A 0.75-second look-ahead, dead zone, temporal damping, and speed limit prevent face-chasing; a short detection gap holds the last focus before recentering. Each scene starts at its own focus, and long scenes are divided into bounded 30-second paths so uncertainty stays local. Vertical sources that already match the target remain static. `ClipPlanner` uses these paths only for Smart Auto Frame; Full Frame uses a centered fill crop.
+
+`ClipHelmFramingVision` is a separate optional boundary. It computes uncertain scene ranges locally; only when the user enables AI Vision and selects a model with vision and structured-output capabilities does it send two 512-pixel JPEG samples from at most three uncertain scenes through `OpenRouterGateway`. The response may contain only a content kind and confidence. Validated classifications can be passed to `ClipPlanner` as hints; all crop geometry remains local. The app does not yet have a clip-processing action, so this service is available to the future processing workflow rather than invoked by the current UI.
 
 ## Data flow
 
