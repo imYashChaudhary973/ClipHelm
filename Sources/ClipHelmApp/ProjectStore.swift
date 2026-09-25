@@ -114,11 +114,13 @@ struct ProjectDraft: Codable, Equatable {
     }
 }
 
-struct ProjectClipRecord: Codable, Identifiable {
+struct ProjectClipRecord: Codable, Identifiable, Sendable {
     let proposal: ClipProposal
-    let spec: ClipHelmEditSpec
-    let previewFileName: String
-    let finalFileName: String
+    var spec: ClipHelmEditSpec
+    var previewFileName: String
+    var finalFileName: String
+    var title: String
+    var trimRange: MediaTimeRange?
 
     var id: ClipID { spec.clipID }
 
@@ -127,20 +129,47 @@ struct ProjectClipRecord: Codable, Identifiable {
         spec = clip.spec
         previewFileName = clip.previewURL.lastPathComponent
         finalFileName = clip.finalURL.lastPathComponent
+        title = clip.proposal.title
+        trimRange = nil
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case proposal, spec, previewFileName, finalFileName, title, trimRange
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        proposal = try c.decode(ClipProposal.self, forKey: .proposal)
+        spec = try c.decode(ClipHelmEditSpec.self, forKey: .spec)
+        previewFileName = try c.decode(String.self, forKey: .previewFileName)
+        finalFileName = try c.decode(String.self, forKey: .finalFileName)
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? proposal.title
+        trimRange = try c.decodeIfPresent(MediaTimeRange.self, forKey: .trimRange)
     }
 
     func validate(for asset: MediaAsset) throws {
-        guard previewFileName == URL(fileURLWithPath: previewFileName).lastPathComponent,
+        let cleaned = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty, cleaned.count <= 120,
+              !cleaned.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }),
+              previewFileName == URL(fileURLWithPath: previewFileName).lastPathComponent,
               finalFileName == URL(fileURLWithPath: finalFileName).lastPathComponent,
+              previewFileName != finalFileName,
               previewFileName.hasSuffix(".mp4"), finalFileName.hasSuffix(".mp4") else {
             throw ModelError.invalid("Project clip file name")
+        }
+        if let trimRange {
+            guard proposal.range.start <= trimRange.start, trimRange.end <= proposal.range.end,
+                  spec.segments.allSatisfy({ trimRange.start <= $0.sourceRange.start &&
+                      $0.sourceRange.end <= trimRange.end }) else {
+                throw ModelError.invalid("Project clip trim")
+            }
         }
         try EditSpecValidator().validate(spec, for: asset, proposal: proposal)
     }
 }
 
 struct ProjectRecord: Codable, Identifiable {
-    static let currentVersion = 3
+    static let currentVersion = 4
 
     let schemaVersion: Int
     let id: ProjectID
@@ -277,6 +306,7 @@ final class ProjectStore: ObservableObject {
                           }) ?? true,
                           record.clips.count <= 1_000,
                           Set(record.clips.map(\.id)).count == record.clips.count,
+                          Set(record.clips.flatMap { [$0.previewFileName, $0.finalFileName] }).count == record.clips.count * 2,
                           record.clips.allSatisfy({ clip in
                               guard let asset = record.mediaAsset else { return false }
                               return (try? clip.validate(for: asset)) != nil
@@ -370,7 +400,8 @@ final class ProjectStore: ObservableObject {
         }
         updated.clips.append(contentsOf: records)
         guard updated.clips.count <= 1_000,
-              Set(updated.clips.map(\.id)).count == updated.clips.count else {
+              Set(updated.clips.map(\.id)).count == updated.clips.count,
+              Set(updated.clips.flatMap { [$0.previewFileName, $0.finalFileName] }).count == updated.clips.count * 2 else {
             throw ModelError.invalid("Duplicate or excessive clips")
         }
         let data = try JSONEncoder().encode(updated)
@@ -379,5 +410,57 @@ final class ProjectStore: ObservableObject {
         try data.write(to: manifest, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: manifest.path)
         projects[index] = updated
+    }
+
+    func updateClip(_ clip: ProjectClipRecord, for projectID: ProjectID) throws {
+        guard let rootURL, let projectIndex = projects.firstIndex(where: { $0.id == projectID }),
+              let asset = projects[projectIndex].mediaAsset,
+              let clipIndex = projects[projectIndex].clips.firstIndex(where: { $0.id == clip.id }) else {
+            throw ModelError.invalid("Clip project mismatch")
+        }
+        let previous = projects[projectIndex].clips[clipIndex]
+        guard clip.proposal == previous.proposal else { throw ModelError.invalid("Clip proposal changed") }
+        try clip.validate(for: asset)
+        let directory = try exportsDirectory(for: projectID)
+        guard FileManager.default.fileExists(atPath: directory.appending(path: clip.previewFileName).path),
+              FileManager.default.fileExists(atPath: directory.appending(path: clip.finalFileName).path) else {
+            throw ModelError.invalid("Clip output missing")
+        }
+        var updated = projects[projectIndex]
+        updated.clips[clipIndex] = clip
+        guard Set(updated.clips.flatMap { [$0.previewFileName, $0.finalFileName] }).count == updated.clips.count * 2 else {
+            throw ModelError.invalid("Duplicate clip output")
+        }
+        try persist(updated, at: projectIndex, rootURL: rootURL)
+        for name in [previous.previewFileName, previous.finalFileName]
+        where name != clip.previewFileName && name != clip.finalFileName {
+            try? FileManager.default.removeItem(at: directory.appending(path: name))
+        }
+    }
+
+    func deleteClip(_ clipID: ClipID, from projectID: ProjectID) throws {
+        guard let rootURL, let projectIndex = projects.firstIndex(where: { $0.id == projectID }),
+              let asset = projects[projectIndex].mediaAsset,
+              let clipIndex = projects[projectIndex].clips.firstIndex(where: { $0.id == clipID }) else {
+            throw ModelError.invalid("Clip project mismatch")
+        }
+        let clip = projects[projectIndex].clips[clipIndex]
+        try clip.validate(for: asset)
+        var updated = projects[projectIndex]
+        updated.clips.remove(at: clipIndex)
+        try persist(updated, at: projectIndex, rootURL: rootURL)
+        let directory = try exportsDirectory(for: projectID)
+        for name in [clip.previewFileName, clip.finalFileName] {
+            try? FileManager.default.removeItem(at: directory.appending(path: name))
+        }
+    }
+
+    private func persist(_ record: ProjectRecord, at index: Int, rootURL: URL) throws {
+        let data = try JSONEncoder().encode(record)
+        guard data.count <= 25_000_000 else { throw ModelError.invalid("Project too large") }
+        let manifest = rootURL.appending(path: "\(record.id.rawValue.uuidString).cliphelm/project.json")
+        try data.write(to: manifest, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: manifest.path)
+        projects[index] = record
     }
 }

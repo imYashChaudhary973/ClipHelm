@@ -1,6 +1,6 @@
 # ClipHelm
 
-Native macOS clip editor in development. Phase 14 connects local analysis, moment discovery, edit planning, and H.264 rendering in the project workspace.
+Native macOS clip editor in development. Phase 15 adds a results view for reviewing and correcting generated clips.
 
 ## Run
 
@@ -27,7 +27,7 @@ In a workspace, choose **Transcribe on This Mac** to use Apple's on-device speec
 
 To discover moments, run **Analyze on This Mac** in the workspace. With speech, transcribe, load structured text models, select one, then choose **Find Best Moments**. The explicit discovery action uses OpenRouter credits and sends only bounded excerpts from local candidate windows. It ranks, deduplicates, checks selected lengths, and shows a reason when no strong moments remain. Click a result to seek. Without a transcript, it can suggest active visual intervals locally for manual review; no AI call is made. Discovery results are session-only in this phase.
 
-The **Process Clips** action reuses saved transcripts and regeneratable analysis caches, finds qualified moments, checks uncertain shots with AI Vision only when enabled and a vision model is selected, builds validated edit specs, then renders preview and final files. Clip exports can be previewed or revealed in Finder from the workspace. Interactive edit-spec manipulation and a full timeline editor remain future work; see [docs/EDIT_SPEC.md](docs/EDIT_SPEC.md).
+The **Process Clips** action reuses saved transcripts and regeneratable analysis caches, finds qualified moments, checks uncertain shots with AI Vision only when enabled and a vision model is selected, builds validated edit specs, then renders preview and final files. Results appear at the top of a processed workspace with video thumbnails, title, duration, source time, and aspect ratio. Play a clip, open its focused editor to rename, adjust framing, change caption style or pacing, trim, or regenerate framing, then preview the replacement. Export one clip or select several and export them to a chosen folder. Deleting a clip removes its generated project files but leaves the original and copies exported elsewhere untouched. After relaunch, playback, rename, and export work from saved files; reattach the original before edits that require rendering. Revisions use local analysis and do not make new AI calls. A full timeline editor remains future work; see [docs/EDIT_SPEC.md](docs/EDIT_SPEC.md).
 
 ## Tests
 
@@ -35,4 +35,4 @@ The **Process Clips** action reuses saved transcripts and regeneratable analysis
 swift test --disable-sandbox
 ```
 
-The tests cover source validation, media and time mapping, transcription, local analysis, moment discovery, edit planning, project restoration, mocked OpenRouter behavior, Keychain input validation, a network-free full processing run, and real 1080p/4K H.264 exports with crops, captions, and audio. The live Keychain CRUD test needs access to macOS Keychain. Module contracts are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+The tests cover source validation, media and time mapping, transcription, local analysis, moment discovery, edit planning, project restoration, result revisions and batch export, mocked OpenRouter behavior, Keychain input validation, a network-free full processing run, and real 1080p/4K H.264 exports with crops, captions, and audio. The live Keychain CRUD test needs access to macOS Keychain. Module contracts are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
