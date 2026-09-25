@@ -4,7 +4,7 @@ ClipHelm is a local-first native macOS editor. Its own pipeline owns media, time
 
 ## Module boundaries
 
-Dependencies point downward. `ClipHelmCore`, `ClipHelmSecurity`, `ClipHelmOpenRouter`, `ClipHelmMedia`, `ClipHelmSources`, `ClipHelmTranscription`, `ClipHelmAnalysis`, `ClipHelmMoments`, `ClipHelmFraming`, `ClipHelmFramingVision`, `ClipHelmLayouts`, `ClipHelmLayoutVision`, `ClipHelmPacing`, `ClipHelmEditing`, and the `ClipHelmApp` shell are implemented targets. The remaining modules are design boundaries for later phases.
+Dependencies point downward. `ClipHelmCore`, `ClipHelmSecurity`, `ClipHelmOpenRouter`, `ClipHelmMedia`, `ClipHelmSources`, `ClipHelmTranscription`, `ClipHelmAnalysis`, `ClipHelmMoments`, `ClipHelmFraming`, `ClipHelmFramingVision`, `ClipHelmLayouts`, `ClipHelmLayoutVision`, `ClipHelmPacing`, `ClipHelmCaptions`, `ClipHelmEditing`, and the `ClipHelmApp` shell are implemented targets. The remaining modules are design boundaries for later phases.
 
 | Module | Owns | May depend on |
 | --- | --- | --- |
@@ -23,8 +23,8 @@ Dependencies point downward. `ClipHelmCore`, `ClipHelmSecurity`, `ClipHelmOpenRo
 | Layouts | On-device screen subtype detection and stable shot-layout planning | Core, Analysis, Media |
 | Layout Vision | Optional subtype classification for uncertain screen segments | Core, Analysis, Layouts, Media, OpenRouter |
 | Pacing | Speech-safe dead-air, long-pause and filler removal proposals | Core, Analysis |
-| Captions | Word segmentation and style timing | Core, Transcription |
-| Editing | Implemented `ClipHelmEditing`: deterministic planning, source/edited timeline mapping, spec validation, typed operations, and in-memory undo/redo | Core, Analysis, Framing, Layouts, Pacing |
+| Captions | Word track, phrase segmentation, eight parameterized styles, shared preview/export overlay drawing | Core, CoreText, CoreGraphics, CoreImage |
+| Editing | Implemented `ClipHelmEditing`: deterministic planning, source/edited timeline mapping, spec validation, typed operations, and in-memory undo/redo | Core, Analysis, Framing, Layouts, Pacing, Captions |
 | Rendering | Preview/export compiler, AVFoundation/VideoToolbox; optional FFmpeg adapter | Core, Media, Editing |
 | SharedUI | Reusable SwiftUI controls and presentation | Core, SwiftUI |
 
@@ -55,6 +55,8 @@ Phase 11 adds seven typed `ShotLayout` choices and source-time `LayoutCue` entri
 `ScreenContentDetector` samples at most 12 likely screen windows, runs fast macOS Vision text recognition locally with progress and cancellation, and emits bounded, uncertain labels for IDE/code, browser demos, slides, software UI, and generic screen shares. These are heuristics; OCR may miss small or stylized text. `ClipHelmLayoutVision` can send only two reduced JPEGs from at most three uncertain screen windows when the user enables AI Vision and selects a structured vision model. OpenRouter returns a subtype and confidence only; ClipHelm validates the response and chooses layouts locally. The current app has no clip-processing or manual-edit UI, so these services and typed overrides are not yet invoked by an interactive review workflow.
 
 Phase 12 adds provider-free `ClipHelmPacing`. `DeadAirDetector`, `LongPauseTrimmer`, and `FillerWordDetector` produce typed source-time `ProposedRemoval` values. `PacingPlanner` checks transcript words, audio activity, sentence punctuation, speaker changes, scene changes, and screen/demo evidence before accepting them. Natural, Balanced, Tight, and Fast retain different contextual pause lengths; there is no single silence threshold that decides every cut. Filler cuts require isolated, short, confidently recognized hesitation words. Keep Demos protects locally classified or signaled screen activity and validated screen hints. `ClipPlanner` converts accepted removals to retained `ClipHelmEditSpec` segments, so captions and the edited timeline follow the same cuts. The app still has no interactive clip-processing or render workflow; acoustic joins cannot be evaluated until rendering exists.
+
+Phase 13 adds provider-free `ClipHelmCaptions`. `CaptionTrackBuilder` filters retained transcript words for the edit spec and source preview. `CaptionProgram` groups words at punctuation, pauses, cut boundaries, speech-speed changes, and line-length limits; its source-time frames carry safe-zone geometry, active-word emphasis, fade, subtle scale, and optional blur-in. `CaptionStyle` selects one of eight bounded font/color/background presets. `CaptionRenderer` draws a transparent CoreGraphics/CoreText image and applies blur with CoreImage. The workspace overlays that same renderer on source playback; a future clip exporter can compose its image onto each output frame after `EditTimeline` maps edited time to source time. Preview and output sizes use the same layout method. Empty transcripts produce no track or overlay. The workspace previews captions on the source image; output-canvas reframing and final video export are later phases.
 
 ## Data flow
 

@@ -24,6 +24,8 @@ All range endpoints are integer microseconds relative to the original asset. `Ed
 
 `EditSpecValidator` checks source/proposal bounds, layout compatibility, timed operation containment, and crop aspect against source and output dimensions. `EditHistory` applies typed trim, remove, crop, shot-layout override, audio, and caption operations to validated snapshots. Undo/redo is in memory, capped at 100 snapshots. A trim or removal clamps layout cues to retained source ranges and drops crop paths or caption cues that no longer fit. Manual overrides are allowed within a retained range when the canvas mode is `fill`; automatic minimum-duration rules do not constrain deliberate user edits. Neither history nor specs modify original media. Rendering and persistent edit history come later.
 
+`CaptionTrack` keeps word-level source times. `ClipHelmCaptions` derives short phrases and per-frame placement without changing the persisted EditSpec schema. The same `CaptionProgram.frame(at:canvasSize:)` and `CaptionRenderer.render(_:canvasSize:)` produce workspace preview overlays and transparent output overlays. Export composition must map edited time through `EditTimeline` before asking for a source-time caption frame. Silent or disabled captions produce no track and no overlay. The current source preview does not display final crop/layout decisions; final video composition is a later phase.
+
 ## AI boundary
 
 ```text

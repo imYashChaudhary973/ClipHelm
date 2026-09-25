@@ -4,6 +4,7 @@ import ClipHelmAnalysis
 import ClipHelmFraming
 import ClipHelmLayouts
 import ClipHelmPacing
+import ClipHelmCaptions
 
 /// Converts validated suggestions and local evidence into renderer-independent decisions.
 public struct ClipPlanner: Sendable {
@@ -72,8 +73,8 @@ public struct ClipPlanner: Sendable {
         case .classicFullFrame, .blurred:
             crops = []
         }
-        let captions = try captionTrack(transcript: transcript, segments: segments,
-                                        configuration: configuration)
+        let captions = try CaptionTrackBuilder().build(transcript: transcript,
+            segments: segments, configuration: configuration)
         let spec = try ClipHelmEditSpec(clipID: clipID, sourceAssetID: asset.id, segments: segments,
                                        outputFormat: configuration.outputFormat,
                                        framingMode: configuration.framingMode,
@@ -84,19 +85,5 @@ public struct ClipPlanner: Sendable {
                                        layoutCues: layoutCues)
         try EditSpecValidator().validate(spec, for: asset, proposal: proposal)
         return spec
-    }
-
-    private func captionTrack(transcript: Transcript?, segments: [EditSegment],
-                              configuration: ClipConfiguration) throws -> CaptionTrack? {
-        guard configuration.captionStyle != nil, let transcript else { return nil }
-        var cues: [CaptionCue] = []
-        for word in transcript.words.sorted(by: { $0.range.start < $1.range.start }) {
-            guard contains(word.range, in: segments),
-                  cues.last.map({ $0.sourceRange.end <= word.range.start }) ?? true else { continue }
-            cues.append(try CaptionCue(sourceRange: word.range, text: word.text))
-        }
-        guard !cues.isEmpty else { return nil }
-        return try CaptionTrack(cues: cues, wordByWord: configuration.captionWordByWord,
-                                blurIn: configuration.captionBlurIn)
     }
 }
