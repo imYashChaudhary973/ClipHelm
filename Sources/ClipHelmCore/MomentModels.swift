@@ -101,6 +101,15 @@ public struct MomentScore: Codable, Equatable, Sendable {
         return max(0, min(1, positive - 0.2 * contextDependency - 0.15 * repetition))
     }
 
+    /// Chance a clip performs well on short-form feeds, from 0 to 1. It weights what holds a
+    /// scrolling viewer (the opening hook, interest, a complete payoff, story) and penalizes
+    /// clips that need outside context or repeat themselves. An estimate, not a prediction.
+    public var viralPotential: Double {
+        let appeal = 0.30 * hook + 0.25 * interest + 0.20 * standaloneCompleteness +
+            0.15 * story + 0.10 * max(insight, educationalValue)
+        return max(0, min(1, appeal - 0.25 * contextDependency - 0.15 * repetition))
+    }
+
     public func withLocalEvidence(_ value: Double) throws -> Self {
         try Self(hook: hook, standaloneCompleteness: standaloneCompleteness, insight: insight,
                  story: story, questionAnswerCompletion: questionAnswerCompletion,

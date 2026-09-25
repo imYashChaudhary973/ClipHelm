@@ -39,12 +39,14 @@ public enum ProcessingError: Error, LocalizedError, Sendable {
     case noMoments(String)
     case sourceMismatch
     case outputDirectory
+    case sourceUnavailable
 
     public var errorDescription: String? {
         switch self {
         case .noMoments(let explanation): explanation
         case .sourceMismatch: "The source does not match this project. Locate the original and try again."
         case .outputDirectory: "Choose a writable destination for generated clips."
+        case .sourceUnavailable: "This project's video isn't available in this session. Locate the original or re-enter its link, then press Start."
         }
     }
 }
