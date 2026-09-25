@@ -63,18 +63,19 @@ final class EditingEngineTests: XCTestCase {
             configuration: configuration(), asset: source, analysis: local, transcript: transcript)
         XCTAssertEqual(spec.clipID, clipID)
         XCTAssertEqual(spec.schemaVersion, 3)
-        XCTAssertEqual(spec.segments.map(\.sourceRange), try [range(2, 5.2), range(6.8, 60)])
+        XCTAssertEqual(spec.segments.map(\.sourceRange), try [range(1.88, 60)])
         XCTAssertEqual(spec.layout, .fill)
         XCTAssertEqual(spec.audioOperation, .normalize)
-        XCTAssertEqual(spec.cropPaths.count, 3)
+        XCTAssertEqual(spec.cropPaths.count, 2)
         XCTAssertGreaterThan(spec.cropPaths.first?.keyframes.count ?? 0, 2)
-        XCTAssertEqual(spec.captionTrack?.cues.map(\.text), ["Begin", "finish"])
+        XCTAssertEqual(spec.captionTrack?.cues.map(\.text), ["Begin", "pause", "finish"])
         XCTAssertTrue(spec.captionTrack?.wordByWord == true)
         XCTAssertTrue(spec.captionTrack?.blurIn == true)
         let timeline = try EditSpecValidator().validate(spec, for: source, proposal: proposal)
-        XCTAssertEqual(timeline.duration, try time(56.4))
-        XCTAssertNil(try timeline.editedTime(forSource: time(6)))
-        XCTAssertEqual(try timeline.sourceTime(forEdited: time(3.2)), try time(6.8))
+        XCTAssertEqual(timeline.duration, try time(58.12))
+        XCTAssertNil(try timeline.editedTime(forSource: time(1)))
+        XCTAssertEqual(try timeline.editedTime(forSource: time(6)), try time(4.12))
+        XCTAssertEqual(try timeline.sourceTime(forEdited: time(3.2)), try time(5.08))
         XCTAssertEqual(try JSONDecoder().decode(ClipHelmEditSpec.self,
             from: JSONEncoder().encode(spec)), spec)
     }
@@ -157,13 +158,19 @@ final class EditingEngineTests: XCTestCase {
         let local = try analysis(for: source, signals: [pause], kind: .screenShare)
         let proposal = try ClipProposal(assetID: source.id, range: range(0, 12),
                                          title: "Demo", rationale: "", confidence: 0.8)
+        let transcript = try Transcript(assetID: source.id, words: [
+            TranscriptWord(text: "Watch", range: range(1, 1.4)),
+            TranscriptWord(text: "Done", range: range(5.3, 5.7)),
+        ])
         let protected = try ClipPlanner().plan(clipID: ClipID(), proposal: proposal,
-            configuration: configuration(keepDemos: true), asset: source, analysis: local)
+            configuration: configuration(keepDemos: true), asset: source, analysis: local,
+            transcript: transcript)
         XCTAssertEqual(protected.segments.map(\.sourceRange), [try range(0, 12)])
         XCTAssertEqual(protected.layoutCues.map(\.layout), [.screenFocus])
         XCTAssertTrue(protected.cropPaths.isEmpty)
         let ordinary = try ClipPlanner().plan(clipID: ClipID(), proposal: proposal,
-            configuration: configuration(), asset: source, analysis: local)
+            configuration: configuration(), asset: source, analysis: local,
+            transcript: transcript)
         XCTAssertEqual(ordinary.segments.count, 2)
     }
 
