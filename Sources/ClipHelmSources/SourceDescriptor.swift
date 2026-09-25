@@ -16,7 +16,11 @@ public enum SourceIngestError: Error, LocalizedError, Equatable, Sendable {
     case downloadTooLarge
     case invalidMedia
     case youtubeToolUnavailable
+    case youtubeToolOutdated
     case youtubeUnavailable
+    case youtubeBotCheck
+    case youtubeRestricted
+    case youtubeLive
 
     public var errorDescription: String? {
         switch self {
@@ -25,11 +29,15 @@ public enum SourceIngestError: Error, LocalizedError, Equatable, Sendable {
         case .unsafeURL: "Use a public HTTPS video link without redirects or private-network addresses."
         case .directURLDisabled: "Direct video links are unavailable while import security is being improved. Choose a local file or an authorized YouTube link."
         case .duplicateInProgress: "This video is already being prepared."
-        case .downloadFailed: "The video could not be downloaded. Check the link and try again."
-        case .downloadTooLarge: "The video exceeds the 2 GB remote download limit."
+        case .downloadFailed: "The video could not be downloaded. Check the link and your internet connection, then try again."
+        case .downloadTooLarge: "The video is too large to download."
         case .invalidMedia: "This file has no playable video track, or macOS cannot decode it."
-        case .youtubeToolUnavailable: "YouTube import needs yt-dlp. Install it on this Mac, then retry."
-        case .youtubeUnavailable: "This public YouTube video could not be imported. Private, protected, or sign-in-only videos are not supported."
+        case .youtubeToolUnavailable: "YouTube import needs the YouTube downloader. Install it, then retry."
+        case .youtubeToolOutdated: "YouTube changed how it serves this video. Update the YouTube downloader in Settings, then retry."
+        case .youtubeUnavailable: "This YouTube video could not be imported. Private, protected, members-only, or removed videos are not supported."
+        case .youtubeBotCheck: "YouTube asked this network to sign in to prove it is not a bot. ClipHelm does not sign in to YouTube. Try again later or from another network."
+        case .youtubeRestricted: "This video is age-restricted and needs a signed-in account, which ClipHelm does not use."
+        case .youtubeLive: "Live streams and upcoming premieres cannot be imported. Try again after the stream has ended."
         }
     }
 }
@@ -130,11 +138,15 @@ public struct PreparedSource: Sendable {
     public let fileURL: URL
     public let asset: MediaAsset
     public let hasAudio: Bool
+    /// The remote video's published title, for naming a project. Display only.
+    public let title: String?
 
-    public init(descriptor: SourceDescriptor, fileURL: URL, asset: MediaAsset, hasAudio: Bool) {
+    public init(descriptor: SourceDescriptor, fileURL: URL, asset: MediaAsset, hasAudio: Bool,
+                title: String? = nil) {
         self.descriptor = descriptor
         self.fileURL = fileURL
         self.asset = asset
         self.hasAudio = hasAudio
+        self.title = title
     }
 }
