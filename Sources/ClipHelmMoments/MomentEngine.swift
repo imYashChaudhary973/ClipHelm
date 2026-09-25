@@ -272,7 +272,7 @@ private enum LocalMomentDiscovery {
         let chapterCount = max(1, (asset.duration.microseconds / 300_000_000) + 1)
         let startStride = max(1, boundaries.count / max(240, Int(chapterCount) * 12))
         let indexedSignals = SignalIndex(analysis.signals)
-        let categories = lengths.isEmpty ? ClipLength.allCases : lengths
+        let categories = ClipLength.effective(lengths)
         var generated: [MomentCandidate] = []
         var seen: Set<MediaTimeRange> = []
         for (index, start) in boundaries.dropLast().enumerated()
@@ -428,7 +428,7 @@ private enum LocalMomentDiscovery {
             try Task.checkCancellation()
             let range = item.proposal.range
             let duration = range.durationMicroseconds
-            guard lengths.isEmpty || lengths.contains(where: {
+            guard ClipLength.effective(lengths).contains(where: {
                 let bounds = $0.boundsSeconds
                 return duration >= Int64(bounds.lowerBound) * 1_000_000 &&
                     duration <= Int64(bounds.upperBound) * 1_000_000

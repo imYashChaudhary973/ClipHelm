@@ -20,7 +20,13 @@ public enum TranscriptEngineError: Error, LocalizedError, Equatable, Sendable {
 
 public protocol TranscriptionBackend: Sendable {
     var maximumChunkSeconds: Int { get }
+    /// How many chunks may be transcribed at once. On-device recognizers use one.
+    var maximumConcurrentChunks: Int { get }
     func transcribe(audioURL: URL) async throws -> [TranscriptWord]
+}
+
+public extension TranscriptionBackend {
+    var maximumConcurrentChunks: Int { 1 }
 }
 
 public struct TranscriptProgress: Sendable {
@@ -39,7 +45,7 @@ public struct TranscriptEngine: Sendable {
     public func transcribe(sourceURL: URL, asset: MediaAsset,
                            backend: any TranscriptionBackend,
                            progress: @escaping @Sendable (TranscriptProgress) -> Void = { _ in }) async throws -> Transcript {
-        guard (1...50).contains(backend.maximumChunkSeconds) else {
+        guard (1...300).contains(backend.maximumChunkSeconds) else {
             throw TranscriptEngineError.unavailable
         }
         let metadata = try await MediaProbe().probe(fileURL: sourceURL,
@@ -57,44 +63,57 @@ public struct TranscriptEngine: Sendable {
 
         let total = asset.duration.microseconds
         let chunkSize = Int64(backend.maximumChunkSeconds) * 1_000_000
-        var start: Int64 = 0
+        let chunks = try stride(from: Int64(0), to: total, by: Int(chunkSize)).map { start in
+            try MediaTimeRange(start: MediaTime(microseconds: start),
+                               end: MediaTime(microseconds: min(total, start + chunkSize)))
+        }
+        progress(.init(stage: .extracting, fraction: 0))
+        let width = max(1, min(8, backend.maximumConcurrentChunks))
         var words: [TranscriptWord] = []
-        while start < total {
-            try Task.checkCancellation()
-            let end = start + min(chunkSize, total - start)
-            let range = try MediaTimeRange(start: MediaTime(microseconds: start),
-                                            end: MediaTime(microseconds: end))
-            progress(.init(stage: .extracting, fraction: Double(start) / Double(total)))
-            let audio = try await AudioExtractor().extract(sourceURL: sourceURL, range: range,
-                outputDirectory: folder)
-            do {
-                progress(.init(stage: .checkingAudio, fraction: Double(start) / Double(total)))
-                if try await AudioExtractor().hasSound(fileURL: audio) {
-                    progress(.init(stage: .transcribing, fraction: Double(start) / Double(total)))
-                    let relative = try await backend.transcribe(audioURL: audio)
-                    try Task.checkCancellation()
-                    for word in relative {
-                        guard word.range.end.microseconds <= range.durationMicroseconds else {
-                            throw TranscriptEngineError.invalidWordTimings
-                        }
-                        let absolute = try MediaTimeRange(
-                            start: MediaTime(microseconds: start + word.range.start.microseconds),
-                            end: MediaTime(microseconds: start + word.range.end.microseconds))
-                        words.append(try TranscriptWord(text: word.text, range: absolute,
-                            confidence: word.confidence, speakerID: word.speakerID))
-                    }
+        try await withThrowingTaskGroup(of: [TranscriptWord].self) { group in
+            var next = 0
+            var finished = 0
+            func submit() {
+                guard next < chunks.count else { return }
+                let range = chunks[next]
+                next += 1
+                group.addTask {
+                    try await Self.transcribe(range, sourceURL: sourceURL, folder: folder, backend: backend)
                 }
-            } catch {
-                try? FileManager.default.removeItem(at: audio)
-                throw error
             }
-            try? FileManager.default.removeItem(at: audio)
-            start = end
-            progress(.init(stage: .transcribing, fraction: Double(start) / Double(total)))
+            for _ in 0..<width { submit() }
+            while let chunkWords = try await group.next() {
+                words.append(contentsOf: chunkWords)
+                finished += 1
+                progress(.init(stage: .transcribing, fraction: Double(finished) / Double(chunks.count)))
+                submit()
+            }
         }
         try Task.checkCancellation()
         let ordered = words.sorted { $0.range.start < $1.range.start }
         return try Transcript(assetID: asset.id, segments: Self.makeSegments(ordered))
+    }
+
+    /// Transcribes one chunk and places its words on the source timeline, clipped to the chunk.
+    private static func transcribe(_ range: MediaTimeRange, sourceURL: URL, folder: URL,
+                                   backend: any TranscriptionBackend) async throws -> [TranscriptWord] {
+        try Task.checkCancellation()
+        let audio = try await AudioExtractor().extract(sourceURL: sourceURL, range: range,
+            outputDirectory: folder)
+        defer { try? FileManager.default.removeItem(at: audio) }
+        guard try await AudioExtractor().hasSound(fileURL: audio) else { return [] }
+        let relative = try await backend.transcribe(audioURL: audio)
+        try Task.checkCancellation()
+        let length = range.durationMicroseconds
+        return try relative.compactMap { word in
+            guard word.range.start.microseconds < length else { return nil }
+            return try TranscriptWord(text: word.text,
+                range: MediaTimeRange(
+                    start: MediaTime(microseconds: range.start.microseconds + word.range.start.microseconds),
+                    end: MediaTime(microseconds: range.start.microseconds +
+                        min(length, word.range.end.microseconds))),
+                confidence: word.confidence, speakerID: word.speakerID)
+        }
     }
 
     private static func makeSegments(_ words: [TranscriptWord]) throws -> [TranscriptSegment] {

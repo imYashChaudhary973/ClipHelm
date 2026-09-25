@@ -46,6 +46,17 @@ struct ClipResultsView: View {
                 Spacer()
                 if !project.clips.isEmpty {
                     if selected.isEmpty {
+                        Button {
+                            chooseExportFolder(for: project.clips.filter { clip in
+                                guard let exportsDirectory else { return false }
+                                return FileManager.default.fileExists(atPath:
+                                    exportsDirectory.appending(path: clip.finalFileName).path)
+                            })
+                        } label: {
+                            Label("Download All", systemImage: "arrow.down.circle")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(exporting || exportsDirectory == nil)
                         Button("Select All") {
                             selected = Set(project.clips.filter { clip in
                                 guard let exportsDirectory else { return false }
@@ -62,7 +73,7 @@ struct ClipResultsView: View {
                     Button {
                         chooseExportFolder(for: project.clips.filter { selected.contains($0.id) })
                     } label: {
-                        Label("Export Selected (\(selected.count))", systemImage: "square.and.arrow.up")
+                        Label("Download Selected (\(selected.count))", systemImage: "arrow.down.circle")
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(selected.isEmpty || exporting || exportsDirectory == nil)
@@ -79,7 +90,7 @@ struct ClipResultsView: View {
                                                        maximum: isVerticalOutput ? 220 : 360),
                                              spacing: DS.Space.md, alignment: .top)],
                           alignment: .leading, spacing: DS.Space.md) {
-                    ForEach(project.clips) { clip in
+                    ForEach(rankedClips) { clip in
                         resultCard(clip, directory: exportsDirectory)
                     }
                 }
@@ -125,6 +136,11 @@ struct ClipResultsView: View {
         .onDisappear { exportJob?.cancel() }
     }
 
+    /// Most promising clips first.
+    private var rankedClips: [ProjectClipRecord] {
+        project.clips.sorted { ($0.viralPotential ?? 0) > ($1.viralPotential ?? 0) }
+    }
+
     private var isVerticalOutput: Bool {
         project.outputFormat.height > project.outputFormat.width
     }
@@ -155,6 +171,11 @@ struct ClipResultsView: View {
                             .padding(.vertical, 2)
                             .background(.black.opacity(0.65), in: Capsule())
                             .padding(DS.Space.xs)
+                    }
+                    .overlay(alignment: .topTrailing) {
+                        if let viral = clip.viralPotential {
+                            ViralBadge(value: viral).padding(DS.Space.xs)
+                        }
                     }
                     .overlay {
                         Image(systemName: "play.circle.fill")
@@ -189,6 +210,12 @@ struct ClipResultsView: View {
             Text("Source \(ClipTimeLabel.source(clip.spec)) · \(ClipTimeLabel.aspect(clip.spec.outputFormat))")
                 .font(.callout).foregroundStyle(.secondary)
                 .lineLimit(1)
+            if !clip.proposal.rationale.isEmpty {
+                Text(clip.proposal.rationale)
+                    .font(.caption).foregroundStyle(.secondary)
+                    .lineLimit(3, reservesSpace: true)
+                    .help(clip.proposal.rationale)
+            }
             if !hasPreview || !hasFinal {
                 StatusMessage(text: "A generated file is missing. Reprocess the source or remove this clip from the project.",
                               tone: .warning)
@@ -196,8 +223,11 @@ struct ClipResultsView: View {
             HStack(spacing: DS.Space.xs) {
                 Button("Edit") { reviewing = ReviewSelection(clipID: clip.id, autoplay: false) }
                     .disabled(!hasPreview)
-                Button("Export") { chooseExportFolder(for: [clip]) }
-                    .disabled(exporting || !hasFinal)
+                Button { chooseExportFolder(for: [clip]) } label: {
+                    Label("Download", systemImage: "arrow.down.circle")
+                }
+                .disabled(exporting || !hasFinal)
+                .help("Save this clip, with its captions, to a folder")
                 Spacer(minLength: 0)
                 Menu {
                     Button("Play") { reviewing = ReviewSelection(clipID: clip.id, autoplay: true) }
@@ -722,5 +752,39 @@ struct ClipReviewView: View {
         AVPlayerItem(asset: AVURLAsset(url: url, options: [
             AVURLAssetReferenceRestrictionsKey: AVAssetReferenceRestrictions.forbidAll.rawValue
         ]))
+    }
+}
+
+extension ProjectClipRecord {
+    /// The model's estimate that this clip performs well; nil for visual-only picks.
+    var viralPotential: Double? { proposal.score?.viralPotential }
+}
+
+/// Viral chance as a percentage with a word, so it never relies on color.
+struct ViralBadge: View {
+    let value: Double
+
+    private var tone: (label: String, color: Color) {
+        switch value {
+        case 0.7...: ("High", .green)
+        case 0.45..<0.7: ("Medium", .orange)
+        default: ("Low", .secondary)
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "flame.fill")
+            Text("\(Int((value * 100).rounded()))% · \(tone.label)")
+                .monospacedDigit()
+        }
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .background(tone.color == .secondary ? Color.black.opacity(0.6) : tone.color.opacity(0.9), in: Capsule())
+        .help("Viral chance: an estimate from the clip's hook, interest, completeness, and story")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Viral chance \(Int((value * 100).rounded())) percent, \(tone.label)")
     }
 }

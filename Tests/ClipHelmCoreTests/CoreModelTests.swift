@@ -180,4 +180,24 @@ final class CoreModelTests: XCTestCase {
         XCTAssertThrowsError(try map.proxyTime(for: time(source.end.microseconds + 1)))
         XCTAssertEqual(try JSONDecoder().decode(MediaTimeMap.self, from: JSONEncoder().encode(map)), map)
     }
+
+    func testViralPotentialRewardsHooksAndPenalizesMissingContext() throws {
+        func score(hook: Double, interest: Double, context: Double) throws -> MomentScore {
+            try MomentScore(hook: hook, standaloneCompleteness: 0.7, insight: 0.5, story: 0.6,
+                            questionAnswerCompletion: 0.5, educationalValue: 0.4, interest: interest,
+                            contextDependency: context, repetition: 0.1)
+        }
+        let strong = try score(hook: 0.9, interest: 0.9, context: 0.1).viralPotential
+        let flat = try score(hook: 0.2, interest: 0.3, context: 0.1).viralPotential
+        let needsContext = try score(hook: 0.9, interest: 0.9, context: 0.9).viralPotential
+        XCTAssertGreaterThan(strong, 0.7)
+        XCTAssertLessThan(flat, 0.45)
+        XCTAssertLessThan(needsContext, strong - 0.15)
+        let perfect = try MomentScore(hook: 1, standaloneCompleteness: 1, insight: 1, story: 1,
+            questionAnswerCompletion: 1, educationalValue: 1, interest: 1, contextDependency: 0, repetition: 0)
+        XCTAssertEqual(perfect.viralPotential, 1, accuracy: 1e-9)
+        let empty = try MomentScore(hook: 0, standaloneCompleteness: 0, insight: 0, story: 0,
+            questionAnswerCompletion: 0, educationalValue: 0, interest: 0, contextDependency: 1, repetition: 1)
+        XCTAssertEqual(empty.viralPotential, 0)
+    }
 }

@@ -2,25 +2,29 @@ import SwiftUI
 import UniformTypeIdentifiers
 import ClipHelmCore
 import ClipHelmSources
+import ClipHelmOpenRouter
 
 struct WizardView: View {
     @Binding var draft: ProjectDraft
     @Binding var step: WizardStep
-    let ingestor: SourceIngestor
-    let onSave: (PreparedSource?) -> Void
+    @ObservedObject var pipeline: ClipPipeline
+    @Binding var authorizedRemote: Bool
+    let onSave: () -> Void
 
     @State private var showsImporter = false
     @State private var sourceError: String?
-    @State private var prepared: PreparedSource?
-    @State private var sourceProgress: SourceProgress?
-    @State private var preparationTask: Task<Void, Never>?
-    @State private var preparationID = UUID()
-    @State private var preparing = false
-    @State private var authorizedRemote = false
     @State private var dropTargeted = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let framingModes: [FramingMode] = [.smartAuto, .fullFrame, .classicFullFrame, .blurred]
+
+    /// The download or local file the wizard is preparing; it keeps running across steps.
+    private var preparation: SourcePreparation? { pipeline.draftSource }
+    private var prepared: PreparedSource? { preparation?.prepared }
+    private var preparing: Bool {
+        guard let preparation else { return false }
+        return !preparation.isFinished && preparation.failure == nil
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -29,6 +33,10 @@ struct WizardView: View {
                     PageHeader(eyebrow: "Step \(step.rawValue + 1) of \(WizardStep.allCases.count)",
                                title: step.title, subtitle: subtitle)
                     stepRail
+                    if step != .source, let preparation {
+                        DownloadStatusLine(preparation: preparation)
+                            .surfaceCard(padding: DS.Space.sm)
+                    }
                     stepContent
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .id(step)
@@ -44,7 +52,6 @@ struct WizardView: View {
                 .padding(.vertical, DS.Space.sm)
                 .background(.bar)
         }
-        .onDisappear { preparationTask?.cancel() }
         .fileImporter(
             isPresented: $showsImporter,
             allowedContentTypes: [.movie, .mpeg4Movie, UTType(filenameExtension: "mkv") ?? .movie]
@@ -103,9 +110,9 @@ struct WizardView: View {
                     .lineLimit(1)
             }
             if step == .process {
-                Button("Create Project") { onSave(prepared) }
+                Button("Create Project") { onSave() }
                     .buttonStyle(.borderedProminent)
-                    .disabled(prepared == nil)
+                    .disabled(blocker != nil)
             } else {
                 Button("Continue") {
                     if let next = WizardStep(rawValue: step.rawValue + 1) { step = next }
@@ -121,17 +128,26 @@ struct WizardView: View {
 
     /// Why the forward action is unavailable, shown next to it.
     private var blocker: String? {
+        return switchBlocker
+    }
+
+    private var switchBlocker: String? {
         switch step {
-        case .source where prepared == nil:
-            preparing ? "Preparing video…" : "Choose a video to continue."
+        case .source, .process:
+            if let failure = preparation?.failure { return failure }
+            if preparation == nil {
+                return draft.sourceKind == .local ? "Choose a video to continue."
+                    : "Paste a link and confirm permission to continue."
+            }
+            // A remote download may finish while the remaining options are chosen.
+            if draft.sourceKind == .local && prepared == nil { return "Preparing video…" }
+            return step == .process && !validTitle ? "Name the project first." : nil
         case .number where draft.countMode != .aiDecides && !(1...1_000).contains(draft.requestedClipCount):
-            "Enter a target from 1 to 1,000."
+            return "Enter a target from 1 to 1,000."
         case .review where !validTitle:
-            "Name the project to continue."
-        case .process where prepared == nil:
-            "Choose a source video first."
+            return "Name the project to continue."
         default:
-            nil
+            return nil
         }
     }
 
@@ -149,8 +165,9 @@ struct WizardView: View {
         case .number: "Let quality determine the count, or set a target."
         case .sound: "Choose how clip audio should be handled."
         case .captions: "Choose a starting style for speech captions."
+        case .models: "Choose who transcribes the video and who finds its best moments."
         case .review: "Check the direction before saving a project draft."
-        case .process: "Create the project, then process clips in its workspace."
+        case .process: "Create the project, then press Start in its workspace."
         }
     }
 
@@ -165,9 +182,73 @@ struct WizardView: View {
         case .number: numberContent
         case .sound: soundContent
         case .captions: captionContent
+        case .models: modelsContent
         case .review: reviewContent
         case .process: processContent
         }
+    }
+
+    // MARK: AI models
+
+    private var transcriptionChoice: Binding<String> {
+        Binding(get: {
+            draft.transcriptionModelID ?? pipeline.recommendedTranscriptionModelID ?? ClipPipeline.onDeviceTranscription
+        }, set: { draft.transcriptionModelID = $0 })
+    }
+
+    private var momentChoice: Binding<String> {
+        Binding(get: { draft.momentModelID ?? pipeline.recommendedMomentModelID ?? "" },
+                set: { draft.momentModelID = $0.isEmpty ? nil : $0 })
+    }
+
+    private var modelsContent: some View {
+        VStack(alignment: .leading, spacing: DS.Space.lg) {
+            if pipeline.loadingCatalog {
+                TaskProgressRow(label: "Loading OpenRouter models", fraction: nil).surfaceCard()
+            }
+            if let message = pipeline.catalogMessage {
+                StatusMessage(text: message, tone: .warning).surfaceCard(padding: DS.Space.sm)
+            }
+            VStack(alignment: .leading, spacing: DS.Space.sm) {
+                Label("Transcription", systemImage: "waveform").font(.headline)
+                Picker("Transcription", selection: transcriptionChoice) {
+                    ForEach(pipeline.transcriptionModels) { model in
+                        Text(model.id == pipeline.recommendedTranscriptionModelID
+                             ? "\(model.name) · Recommended" : model.name).tag(model.id)
+                    }
+                    Divider()
+                    Text("On this Mac (free, slower)").tag(ClipPipeline.onDeviceTranscription)
+                }
+                .labelsHidden()
+                .frame(maxWidth: 420, alignment: .leading)
+                StatusMessage(text: transcriptionChoice.wrappedValue == ClipPipeline.onDeviceTranscription
+                              ? "Audio stays on this Mac. Transcription runs on-device and takes longer."
+                              : "Sends the video's audio to this OpenRouter model for word-timed captions. Fast; uses a few cents of credits per hour of audio.",
+                              tone: .info)
+            }
+            .surfaceCard()
+            VStack(alignment: .leading, spacing: DS.Space.sm) {
+                Label("Moment finding", systemImage: "sparkles").font(.headline)
+                Picker("Moment model", selection: momentChoice) {
+                    if pipeline.momentModels.isEmpty { Text("Recommended model").tag("") }
+                    ForEach(pipeline.momentModels) { model in
+                        Text(model.id == pipeline.recommendedMomentModelID
+                             ? "\(model.name) · Recommended" : model.name).tag(model.id)
+                    }
+                }
+                .labelsHidden()
+                .frame(maxWidth: 420, alignment: .leading)
+                StatusMessage(text: "Rates candidate moments from transcript excerpts and estimates each clip's viral chance. Uses API credits.",
+                              tone: .info)
+            }
+            .surfaceCard()
+        }
+        .task { await pipeline.loadCatalog() }
+    }
+
+    private func modelName(_ id: String?, in models: [OpenRouterModel]) -> String {
+        guard let id else { return "Recommended" }
+        return models.first { $0.id == id }?.name ?? id
     }
 
     // MARK: Steps
@@ -189,10 +270,12 @@ struct WizardView: View {
             } else {
                 remoteForm
             }
-            if preparing {
-                TaskProgressRow(label: progressLabel, fraction: sourceProgress?.fraction,
-                                onCancel: resetSource)
+            if let preparation, prepared == nil {
+                DownloadStatusLine(preparation: preparation)
                     .surfaceCard()
+                if draft.sourceKind != .local && preparing {
+                    StatusMessage(text: "You can continue choosing options while the video downloads.", tone: .info)
+                }
             }
             if let sourceError {
                 StatusMessage(text: sourceError, tone: .error)
@@ -239,12 +322,14 @@ struct WizardView: View {
             TextField("https://…", text: $draft.remoteURL)
                 .textFieldStyle(.roundedBorder)
                 .accessibilityLabel(draft.sourceKind.rawValue)
-                .onChange(of: draft.remoteURL) { _, _ in resetSource() }
-                .onSubmit { if canPrepareRemote { prepareRemote() } }
+                .onChange(of: draft.remoteURL) { _, _ in startRemoteIfReady() }
+                .onSubmit { startRemoteIfReady() }
             Toggle("I own this video or have permission to process it", isOn: $authorizedRemote)
-                .onChange(of: authorizedRemote) { _, _ in resetSource() }
-            Button("Prepare Source") { prepareRemote() }
-                .disabled(!canPrepareRemote)
+                .onChange(of: authorizedRemote) { _, _ in startRemoteIfReady() }
+            if preparation?.failure != nil {
+                Button("Try Download Again") { restartRemote() }
+            }
+            StatusMessage(text: "The download starts as soon as the link and permission are set.", tone: .neutral)
             Divider()
             StatusMessage(text: draft.sourceKind == .youtube
                           ? "Use a YouTube link for media you own or may process."
@@ -256,9 +341,6 @@ struct WizardView: View {
         .surfaceCard()
     }
 
-    private var canPrepareRemote: Bool {
-        !preparing && !draft.remoteURL.isEmpty && authorizedRemote
-    }
 
     private func readyCard(_ asset: MediaAsset) -> some View {
         HStack(spacing: DS.Space.sm) {
@@ -366,7 +448,7 @@ struct WizardView: View {
             }
             HStack {
                 StatusMessage(text: draft.lengths.isEmpty
-                              ? "Nothing selected means Any Length."
+                              ? "Nothing selected means Auto: short-form clips from 10 seconds to 2 minutes."
                               : "\(draft.lengths.count) of \(ClipLength.allCases.count) ranges selected.",
                               tone: .neutral)
                 Spacer()
@@ -493,7 +575,7 @@ struct WizardView: View {
                 reviewRow("Pacing", draft.pacingMode.label, edit: .smartEditing)
                 reviewRow("Smart editing", smartEditSummary, edit: .smartEditing)
                 reviewRow("Length", draft.lengths.isEmpty
-                          ? "Any Length"
+                          ? "Auto (10 seconds – 2 minutes)"
                           : ClipLength.allCases.filter { draft.lengths.contains($0) }.map(\.label).joined(separator: ", "),
                           edit: .length)
                 reviewRow("Number", draft.countMode == .aiDecides
@@ -501,7 +583,11 @@ struct WizardView: View {
                 reviewRow("Sound", draft.soundMode == .normalize ? "Normalize" : "Original", edit: .sound)
                 reviewRow("Captions", draft.captionsEnabled
                           ? "\(draft.captionStyle.label)\(draft.captionWordByWord ? " · Word-by-word" : "")\(draft.captionBlurIn ? " · Blur-in" : "")"
-                          : "Off", edit: .captions, last: true)
+                          : "Off", edit: .captions)
+                reviewRow("Transcription", pipeline.resolvedTranscriptionModelID(draft.transcriptionModelID)
+                          .map { modelName($0, in: pipeline.transcriptionModels) } ?? "On this Mac", edit: .models)
+                reviewRow("Moment model", modelName(draft.momentModelID ?? pipeline.recommendedMomentModelID,
+                          in: pipeline.momentModels), edit: .models, last: true)
             }
             .background(DS.surface, in: RoundedRectangle(cornerRadius: DS.Radius.large, style: .continuous))
             .overlay {
@@ -549,20 +635,22 @@ struct WizardView: View {
 
     private var processContent: some View {
         VStack(alignment: .leading, spacing: DS.Space.md) {
-            if prepared != nil {
+            if let preparation {
                 HStack(spacing: DS.Space.md) {
-                    Image(systemName: "checkmark.seal.fill")
+                    Image(systemName: prepared != nil ? "checkmark.seal.fill" : "arrow.down.circle")
                         .font(.system(size: 34))
-                        .foregroundStyle(.green)
+                        .foregroundStyle(prepared != nil ? .green : DS.accent)
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: DS.Space.xxs) {
-                        Text(draft.sourceKind == .local ? "Source ready" : "Download complete")
+                        Text(prepared != nil ? (draft.sourceKind == .local ? "Source ready" : "Download complete")
+                             : "Download in progress")
                             .font(.title3.weight(.semibold))
-                        Text("Create the project to start transcription and clip generation.")
+                        Text("Create the project, then press Start in its workspace to make clips.")
                             .foregroundStyle(.secondary)
                     }
                 }
                 .surfaceCard(padding: DS.Space.lg, highlighted: true)
+                if prepared == nil { DownloadStatusLine(preparation: preparation).surfaceCard(padding: DS.Space.sm) }
             } else {
                 HStack {
                     StatusMessage(text: "No source is prepared. Choose a video before creating the project.",
@@ -577,63 +665,40 @@ struct WizardView: View {
         }
     }
 
-    private var progressLabel: String {
-        switch sourceProgress?.stage {
-        case .checking: "Checking source…"
-        case .downloading: "Downloading…"
-        case .validating: "Validating video…"
-        case nil: "Preparing…"
-        }
-    }
-
     private func resetSource() {
-        preparationTask?.cancel()
-        preparationID = UUID()
-        preparing = false
-        prepared = nil
-        sourceProgress = nil
+        pipeline.clearDraftSource()
         sourceError = nil
         draft.sourceName = ""
     }
 
     private func prepareLocal(_ url: URL) {
         resetSource()
-        do { startPreparation(try SourceDescriptor(localFile: url)) }
-        catch { sourceError = safeSourceError(error) }
-    }
-
-    private func prepareRemote() {
-        resetSource()
         do {
-            startPreparation(try SourceDescriptor(remoteURL: draft.remoteURL,
-                                                  youtube: draft.sourceKind == .youtube,
-                                                  authorized: authorizedRemote))
+            let descriptor = try SourceDescriptor(localFile: url)
+            draft.sourceName = url.lastPathComponent
+            pipeline.prepareDraftSource(descriptor)
         } catch { sourceError = safeSourceError(error) }
     }
 
-    private func startPreparation(_ descriptor: SourceDescriptor) {
-        let id = UUID()
-        preparationID = id
-        preparing = true
-        let ingestor = self.ingestor
-        preparationTask = Task {
-            do {
-                let result = try await ingestor.prepare(descriptor) { update in
-                    Task { @MainActor in
-                        if preparationID == id { sourceProgress = update }
-                    }
-                }
-                guard preparationID == id else { return }
-                prepared = result
-                if descriptor.kind == .local { draft.sourceName = result.asset.displayName }
-                draft.captionsEnabled = result.hasAudio
-                preparing = false
-            } catch {
-                guard preparationID == id else { return }
-                preparing = false
-                if !(error is CancellationError) { sourceError = safeSourceError(error) }
-            }
+    /// Starts the download once the link parses and permission is confirmed.
+    private func startRemoteIfReady() {
+        sourceError = nil
+        guard authorizedRemote, !draft.remoteURL.isEmpty else {
+            if pipeline.draftSource?.descriptor.kind != .local { pipeline.clearDraftSource() }
+            return
         }
+        do {
+            pipeline.prepareDraftSource(try SourceDescriptor(remoteURL: draft.remoteURL,
+                youtube: draft.sourceKind == .youtube, authorized: authorizedRemote))
+        } catch {
+            pipeline.clearDraftSource()
+            sourceError = safeSourceError(error)
+        }
+    }
+
+    private func restartRemote() {
+        pipeline.clearDraftSource()
+        startRemoteIfReady()
     }
 
     private func safeSourceError(_ error: Error) -> String {

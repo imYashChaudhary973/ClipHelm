@@ -47,15 +47,28 @@ final class YouTubeEndToEndTests: XCTestCase {
         let recommended = await registry.preferredModel(for: .clipDiscovery)
         let model = try XCTUnwrap(environment["CLIPHELM_QA_MODEL"] ?? recommended?.id)
         print("QA_E2E_MODEL=\(model)")
+        let anyLength = environment["CLIPHELM_QA_E2E_ANY_LENGTH"] == "1"
         let configuration = try ClipConfiguration(outputFormat: .vertical, framingMode: .smartAuto,
-            pacingMode: .balanced, selectedLengths: [.seconds30to60], requestedClipCount: 3,
+            pacingMode: .balanced, selectedLengths: anyLength ? [] : [.seconds30to60],
+            requestedClipCount: anyLength ? nil : 3,
             soundMode: .source, captionStyle: .pop,
             smartEdit: SmartEditOptions(useVisionForTrickyShots: false, cutDeadAir: true,
                 trimLongPauses: true, cleanFillers: false, keepDemos: true))
+        // OpenRouter transcription runs first, like the app; on-device otherwise.
+        var cachedTranscript: Transcript?
+        if let transcriptionID = environment["CLIPHELM_QA_TRANSCRIPTION_MODEL"] {
+            let offered = await registry.models(supporting: [.transcription])
+            let transcriptionModel = try XCTUnwrap(offered.first { $0.id == transcriptionID })
+            let transcribed = Date()
+            cachedTranscript = try await TranscriptEngine().transcribe(sourceURL: source.fileURL,
+                asset: source.asset,
+                backend: OpenRouterTranscriptionBackend(gateway: gateway, model: transcriptionModel))
+            print("QA_E2E_TRANSCRIPTION=\(transcriptionID) \(Date().timeIntervalSince(transcribed))s words=\(cachedTranscript?.words.count ?? 0)")
+        }
         let timer = StageTimer()
         let processed = Date()
         let result = try await ProcessingCoordinator(ingestor: ingestor).run(prepared: source,
-            expectedAsset: source.asset, configuration: configuration,
+            expectedAsset: source.asset, configuration: configuration, cachedTranscript: cachedTranscript,
             cacheDirectory: output.appending(path: "Cache"), outputDirectory: output.appending(path: "Exports"),
             backend: try await OnDeviceSpeech.backend(), modelID: model, gateway: gateway, registry: registry) { timer.observe($0.stage) }
         var usage = rusage()
@@ -68,7 +81,7 @@ final class YouTubeEndToEndTests: XCTestCase {
         XCTAssertFalse(result.clips.isEmpty)
         for clip in result.clips {
             let final = try await MediaProbe().probe(fileURL: clip.finalURL, displayName: "Final")
-            print("QA_E2E_CLIP \(clip.proposal.title) | \(clip.proposal.range.start.microseconds / 1_000_000)s–\(clip.proposal.range.end.microseconds / 1_000_000)s | \(final.asset.width)x\(final.asset.height) | cues=\(clip.spec.captionTrack?.cues.count ?? 0) | \(clip.finalURL.path)")
+            print("QA_E2E_CLIP \(clip.proposal.title) | \(clip.proposal.range.start.microseconds / 1_000_000)s–\(clip.proposal.range.end.microseconds / 1_000_000)s | \(final.asset.width)x\(final.asset.height) | cues=\(clip.spec.captionTrack?.cues.count ?? 0) | viral=\(Int(((clip.proposal.score?.viralPotential ?? 0) * 100).rounded()))% | \(clip.finalURL.path)")
             XCTAssertEqual(final.asset.width, 1080)
             XCTAssertEqual(final.asset.height, 1920)
             XCTAssertTrue(final.hasAudio)

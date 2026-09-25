@@ -55,6 +55,10 @@ struct ProjectDraft: Codable, Equatable {
     var captionStyle: CaptionStyle = .pop
     var captionWordByWord = false
     var captionBlurIn = false
+    /// OpenRouter transcription model, or nil to transcribe on this Mac.
+    var transcriptionModelID: String?
+    /// OpenRouter model that rates moments; nil uses the recommended model.
+    var momentModelID: String?
 
     init() { }
 
@@ -62,7 +66,7 @@ struct ProjectDraft: Codable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case title, sourceKind, preset, resolution, framingMode, smartEdit, pacingMode, lengths
         case countMode, requestedClipCount, soundMode, captionsEnabled, captionStyle
-        case captionWordByWord, captionBlurIn
+        case captionWordByWord, captionBlurIn, transcriptionModelID, momentModelID
     }
 
     init(from decoder: Decoder) throws {
@@ -84,6 +88,8 @@ struct ProjectDraft: Codable, Equatable {
         captionStyle = try c.decode(CaptionStyle.self, forKey: .captionStyle)
         captionWordByWord = try c.decodeIfPresent(Bool.self, forKey: .captionWordByWord) ?? false
         captionBlurIn = try c.decodeIfPresent(Bool.self, forKey: .captionBlurIn) ?? false
+        transcriptionModelID = try c.decodeIfPresent(String.self, forKey: .transcriptionModelID)
+        momentModelID = try c.decodeIfPresent(String.self, forKey: .momentModelID)
     }
 
     var configuration: ClipConfiguration {
@@ -184,9 +190,11 @@ struct ProjectRecord: Codable, Identifiable {
     let sourceKind: SourceKind
     let sourceLabel: String
     var configuration: ClipConfiguration
-    let mediaAsset: MediaAsset?
+    fileprivate(set) var mediaAsset: MediaAsset?
     var transcript: Transcript?
     var clips: [ProjectClipRecord]
+    var transcriptionModelID: String?
+    var momentModelID: String?
 
     var outputFormat: OutputFormat { configuration.outputFormat }
     var framingMode: FramingMode { configuration.framingMode }
@@ -210,12 +218,15 @@ struct ProjectRecord: Codable, Identifiable {
         self.mediaAsset = mediaAsset
         transcript = nil
         clips = []
+        transcriptionModelID = draft.transcriptionModelID
+        momentModelID = draft.momentModelID
     }
 
     private enum CodingKeys: String, CodingKey {
         case schemaVersion, id, title, createdAt, sourceKind, sourceLabel
         case configuration, mediaAsset, transcript, clips
         case outputFormat, framingMode, selectedLengths, captionStyle
+        case transcriptionModelID, momentModelID
     }
 
     init(from decoder: Decoder) throws {
@@ -233,6 +244,8 @@ struct ProjectRecord: Codable, Identifiable {
         mediaAsset = try c.decodeIfPresent(MediaAsset.self, forKey: .mediaAsset)
         transcript = try c.decodeIfPresent(Transcript.self, forKey: .transcript)
         clips = try c.decodeIfPresent([ProjectClipRecord].self, forKey: .clips) ?? []
+        transcriptionModelID = try c.decodeIfPresent(String.self, forKey: .transcriptionModelID)
+        momentModelID = try c.decodeIfPresent(String.self, forKey: .momentModelID)
         if version == 1 {
             configuration = try ClipConfiguration(
                 outputFormat: c.decode(OutputFormat.self, forKey: .outputFormat),
@@ -260,6 +273,8 @@ struct ProjectRecord: Codable, Identifiable {
         try c.encodeIfPresent(mediaAsset, forKey: .mediaAsset)
         try c.encodeIfPresent(transcript, forKey: .transcript)
         try c.encode(clips, forKey: .clips)
+        try c.encodeIfPresent(transcriptionModelID, forKey: .transcriptionModelID)
+        try c.encodeIfPresent(momentModelID, forKey: .momentModelID)
     }
 }
 
@@ -389,6 +404,28 @@ final class ProjectStore: ObservableObject {
                                               ofItemAtPath: package.appending(path: "project.json").path)
         projects.insert(record, at: 0)
         return record
+    }
+
+    /// Records the source media for a project created before its download finished.
+    func attachMediaAsset(_ asset: MediaAsset, to projectID: ProjectID) throws {
+        guard let rootURL, let index = projects.firstIndex(where: { $0.id == projectID }) else {
+            throw ModelError.invalid("Media project")
+        }
+        if let existing = projects[index].mediaAsset {
+            guard existing == asset else { throw ModelError.invalid("Media project mismatch") }
+            return
+        }
+        var updated = projects[index]
+        updated.mediaAsset = asset
+        try write(updated, to: rootURL)
+        projects[index] = updated
+    }
+
+    private func write(_ record: ProjectRecord, to rootURL: URL) throws {
+        let data = try JSONEncoder().encode(record)
+        let manifest = rootURL.appending(path: "\(record.id.rawValue.uuidString).cliphelm/project.json")
+        try data.write(to: manifest, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: manifest.path)
     }
 
     func saveTranscript(_ transcript: Transcript, for projectID: ProjectID) throws {

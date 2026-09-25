@@ -4,7 +4,7 @@ ClipHelm is a native macOS tool for creators. The interface uses system controls
 
 ## Principles
 
-1. **One primary action per screen.** Home: New Clip Project. Wizard: Continue / Create Project in the pinned footer. Workspace: Process Clips. Review sheet: Save Changes.
+1. **One primary action per screen.** Home: New Clip Project. Wizard: Continue / Create Project in the pinned footer. Workspace: the circular Start button. Review sheet: Save Changes.
 2. **Status is never color alone.** Every state pairs an SF Symbol with text (`StatusMessage`, `StatusBadge`).
 3. **Show, don't name.** Visual choices (canvas, framing, pacing, caption style) are picked from cards with an icon, a description, or a rendered sample.
 4. **Explain disabled actions.** When a forward action is unavailable, the reason appears next to it (for example, "Choose a video to continue.").
@@ -47,7 +47,7 @@ The accent is applied once at the window root with `.tint(DS.accent)`. Semantic 
 - **Sidebar**: logo and wordmark, then **New Clip Project** as a full-width primary button (an action, not a destination). Below that, a Library section (Home, and Recent Projects with a count badge) and a Projects section listing the eight most recent projects. Each project row shows a gradient tile, its status, and a relative date so same-named projects stay distinct. Settings is pinned to the bottom with its shortcut.
 - **Home**: hero surface with the primary action, a three-step "how it works" row, and recent projects as one grouped list.
 - **New Clip Project**: header, clickable step rail (completed steps jump back), step content, and a pinned footer with Back, the blocking reason, and Continue. The Review step lists every choice with an Edit link to its step.
-- **Workspace**: player (a taller stage for vertical sources), source-access card when needed, the highlighted **Process clips** card, then an optional "Explore the source" group: Local analysis, Transcript, Best moments.
+- **Workspace**: the clip job card first. Before a run it holds the circular **Start** button, the live download line, and a summary of the chosen options; during a run it lists every phase with its state and percent; afterwards it summarizes the result. Generated clips follow, then the player (a taller stage for vertical sources), the source-access card when needed, and an optional "Explore the source" group: Local analysis, Transcript, Best moments.
 - **Generated clips**: adaptive grid of cards with thumbnails in the output's aspect ratio, a duration badge, a selection checkbox, and Edit, Export, and More actions. The header switches between Select All and "N selected · Deselect All".
 - **Review Clip sheet**: vertical clips sit beside the controls, horizontal clips above them. A pinned footer holds Delete, Export, and Save Changes (⌘S). Closing with unsaved changes asks before discarding.
 - **Settings**: grouped surfaces for General, OpenRouter, and Keyboard Shortcuts.

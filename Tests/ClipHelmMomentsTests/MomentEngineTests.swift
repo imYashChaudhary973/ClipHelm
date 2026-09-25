@@ -153,6 +153,18 @@ final class MomentEngineTests: XCTestCase {
         }
     }
 
+    func testNoLengthSelectionMeansShortFormClips() async throws {
+        let input = try fixture("podcast", long: true)
+        let result = try await MomentEngine(maximumSemanticWindows: 40).discover(
+            asset: input.asset, transcript: input.transcript, analysis: input.analysis,
+            selectedLengths: [], requestedCount: nil,
+            modelID: "fixture/model", gateway: RatingGateway())
+        XCTAssertFalse(result.moments.isEmpty)
+        XCTAssertTrue(result.moments.allSatisfy {
+            (10_000_000...120_000_000).contains($0.proposal.range.durationMicroseconds)
+        })
+    }
+
     func testSomeFailedRequestsStillProduceMoments() async throws {
         let input = try fixture("podcast")
         let gateway = RatingGateway(failure: .invalidResponse, failEvery: 3)

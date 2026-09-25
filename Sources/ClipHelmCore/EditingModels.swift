@@ -20,6 +20,14 @@ public enum ClipLength: String, Codable, CaseIterable, Sendable {
     case seconds10to30, seconds30to60, minutes1to2, minutes2to5
     case minutes5to10, minutes10to15, minutes15to30
 
+    /// Used when no length is chosen: clips sized for short-form feeds.
+    public static let automatic: [ClipLength] = [.seconds10to30, .seconds30to60, .minutes1to2]
+
+    /// The ranges a selection allows; an empty selection means `automatic`.
+    public static func effective(_ selection: [ClipLength]) -> [ClipLength] {
+        selection.isEmpty ? automatic : selection
+    }
+
     public var boundsSeconds: ClosedRange<Int> {
         switch self {
         case .seconds10to30: 10...30
