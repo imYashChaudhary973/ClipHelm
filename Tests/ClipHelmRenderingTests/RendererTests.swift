@@ -99,6 +99,65 @@ final class RendererTests: XCTestCase {
         XCTAssertEqual(formats.first.map(CMFormatDescriptionGetMediaSubType), kCMVideoCodecType_H264)
     }
 
+    func testOptInRealFourKRenderProfile() async throws {
+        guard let path = ProcessInfo.processInfo.environment["CLIPHELM_QA_RENDER_SOURCE"] else {
+            throw XCTSkip("Set CLIPHELM_QA_RENDER_SOURCE to an authorized 4K MP4")
+        }
+        let source = URL(fileURLWithPath: path)
+        let asset = try await MediaProbe().probe(fileURL: source, displayName: "QA 4K").asset
+        XCTAssertEqual(asset.width, 3840)
+        XCTAssertEqual(asset.height, 2160)
+        let start = try MediaTime(microseconds: 60_000_000)
+        let end = try MediaTime(microseconds: 72_000_000)
+        XCTAssertGreaterThan(asset.duration.microseconds, end.microseconds)
+        let range = try MediaTimeRange(start: start, end: end)
+        let spec = try ClipHelmEditSpec(clipID: ClipID(), sourceAssetID: asset.id,
+            segments: [EditSegment(sourceRange: range)],
+            outputFormat: try OutputFormat(width: 3840, height: 2160),
+            framingMode: .classicFullFrame, pacingMode: .natural,
+            soundMode: .source, captionStyle: nil)
+        let directory = FileManager.default.temporaryDirectory.appending(path: "ClipHelm-real-4k-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let output = directory.appending(path: "clip.mp4")
+        try await renderProfiled("real-3840x2160", spec: spec, source: source, asset: asset, output: output)
+        let rendered = try await MediaProbe().probe(fileURL: output, displayName: "QA render").asset
+        XCTAssertEqual(rendered.width, 3840)
+        XCTAssertEqual(rendered.height, 2160)
+        XCTAssertEqual(Double(rendered.duration.microseconds) / 1_000_000, 12, accuracy: 0.2)
+        let audioTracks = try await AVURLAsset(url: output).loadTracks(withMediaType: .audio)
+        XCTAssertEqual(audioTracks.count, 1)
+        if let retainedPath = ProcessInfo.processInfo.environment["CLIPHELM_QA_RENDER_OUTPUT"] {
+            try FileManager.default.copyItem(at: output, to: URL(fileURLWithPath: retainedPath))
+        }
+    }
+
+    func testOptInControlledDiskFullRenderCleansPartialFile() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let sourcePath = environment["CLIPHELM_QA_LOW_SPACE_SOURCE"],
+              let directoryPath = environment["CLIPHELM_QA_LOW_SPACE_DIRECTORY"] else {
+            throw XCTSkip("Set an authorized 4K source and a disposable size-limited volume")
+        }
+        let source = URL(fileURLWithPath: sourcePath)
+        let directory = URL(fileURLWithPath: directoryPath)
+        let asset = try await MediaProbe().probe(fileURL: source, displayName: "Low-space QA").asset
+        let range = try MediaTimeRange(start: MediaTime(microseconds: 553_052_500),
+                                       end: MediaTime(microseconds: 579_078_500))
+        let spec = try ClipHelmEditSpec(clipID: ClipID(), sourceAssetID: asset.id,
+            segments: [EditSegment(sourceRange: range)],
+            outputFormat: try OutputFormat(width: 3840, height: 2160),
+            framingMode: .classicFullFrame, pacingMode: .natural,
+            soundMode: .mute, captionStyle: nil)
+        let output = directory.appending(path: "clip.mp4")
+        do {
+            _ = try await ClipRenderer().render(spec, sourceURL: source, asset: asset, outputURL: output)
+            XCTFail("Rendering beyond disposable volume capacity must fail")
+        } catch RenderError.encodingFailed { }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: output.path))
+        let leftovers = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+            .filter { $0.hasSuffix(".mp4") }
+        XCTAssertTrue(leftovers.isEmpty, "Partial MP4 files remain: \(leftovers)")
+    }
+
     func testCancelledRenderLeavesNoTemporaryMedia() async throws {
         let source = try XCTUnwrap(Bundle.module.url(forResource: "landscape4k", withExtension: "mp4"))
         let asset = try await MediaProbe().probe(fileURL: source, displayName: "4K").asset

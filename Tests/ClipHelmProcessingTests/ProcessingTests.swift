@@ -18,8 +18,18 @@ private struct UnusedBackend: TranscriptionBackend {
 private final class ProgressLog: @unchecked Sendable {
     private let lock = NSLock()
     private var values: [ProcessingProgress] = []
-    func append(_ value: ProcessingProgress) { lock.lock(); values.append(value); lock.unlock() }
+    private var transitions: [(ProcessingStage, Date)] = []
+    func append(_ value: ProcessingProgress) {
+        lock.lock()
+        values.append(value)
+        if transitions.last?.0 != value.stage { transitions.append((value.stage, Date())) }
+        lock.unlock()
+    }
     var stages: [ProcessingStage] { lock.lock(); defer { lock.unlock() }; return values.map(\.stage) }
+    var stageDurations: [(ProcessingStage, TimeInterval)] {
+        lock.lock(); defer { lock.unlock() }
+        return zip(transitions, transitions.dropFirst()).map { ($0.0.0, $0.1.1.timeIntervalSince($0.0.1)) }
+    }
 }
 
 final class ProcessingTests: XCTestCase {
@@ -28,10 +38,15 @@ final class ProcessingTests: XCTestCase {
     }
 
     func testSilentSourceRunsAllStagesAndRendersWithoutNetwork() async throws {
-        let file = try XCTUnwrap(Bundle.module.url(forResource: "silent-motion", withExtension: "mp4"))
+        let environment = ProcessInfo.processInfo.environment
+        let qaSource = environment["CLIPHELM_QA_SILENT_SOURCE"]
+        let fourK = environment["CLIPHELM_QA_OUTPUT_4K"] == "1"
+        let file = try XCTUnwrap(qaSource.map { URL(fileURLWithPath: $0) } ??
+            Bundle.module.url(forResource: "silent-motion", withExtension: "mp4"))
         let ingestor = SourceIngestor()
         let source = try await ingestor.prepare(SourceDescriptor(localFile: file))
-        let configuration = try ClipConfiguration(outputFormat: .vertical,
+        let configuration = try ClipConfiguration(outputFormat: fourK
+            ? OutputFormat(width: 3840, height: 2160) : .vertical,
             framingMode: .classicFullFrame, pacingMode: .natural,
             selectedLengths: [.seconds10to30], requestedClipCount: 1,
             soundMode: .mute, captionStyle: nil,
@@ -42,6 +57,7 @@ final class ProcessingTests: XCTestCase {
         let gateway = MockOpenRouterGateway()
         let registry = OpenRouterModelRegistry(gateway: gateway)
         let log = ProgressLog()
+        let started = Date()
         let result = try await ProcessingCoordinator(ingestor: ingestor,
             momentEngine: MomentEngine(minimumQuality: 0)).run(prepared: source,
                 expectedAsset: source.asset, configuration: configuration,
@@ -49,14 +65,23 @@ final class ProcessingTests: XCTestCase {
                 outputDirectory: directory.appending(path: "Exports"),
                 backend: UnusedBackend(), modelID: nil, gateway: gateway,
                 registry: registry) { log.append($0) }
+        if qaSource != nil {
+            print("QA_PROCESSING_WALL_SECONDS=\(Date().timeIntervalSince(started))")
+            for (stage, duration) in log.stageDurations {
+                print("QA_STAGE_\(stage.rawValue)=\(duration)")
+            }
+            for clip in result.clips {
+                print("QA_CLIP_SOURCE_RANGE=\(clip.proposal.range.start.microseconds)...\(clip.proposal.range.end.microseconds)")
+            }
+        }
         XCTAssertEqual(result.clips.count, 1)
         XCTAssertFalse(result.transcript.hasMeaningfulSpeech)
         XCTAssertTrue(FileManager.default.fileExists(atPath: result.clips[0].previewURL.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: result.clips[0].finalURL.path))
         let final = try await MediaProbe().probe(fileURL: result.clips[0].finalURL,
                                                   displayName: "Final")
-        XCTAssertEqual(final.asset.width, 1080)
-        XCTAssertEqual(final.asset.height, 1920)
+        XCTAssertEqual(final.asset.width, fourK ? 3840 : 1080)
+        XCTAssertEqual(final.asset.height, fourK ? 2160 : 1920)
         if let inspectionPath = ProcessInfo.processInfo.environment["CLIPHELM_INSPECT_OUTPUT"] {
             try FileManager.default.copyItem(at: result.clips[0].finalURL,
                                              to: URL(fileURLWithPath: inspectionPath))

@@ -97,6 +97,26 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(restored.clips[0].title, "Good moment")
         XCTAssertFalse(restored.configuration.captionStyle != nil)
 
+        let interruptedClip = directory.appending(path: "clip-001-\(UUID().uuidString)-preview.mp4")
+        let interruptedRevision = directory.appending(path:
+            "clip-\(UUID().uuidString)-\(UUID().uuidString).mp4")
+        let interruptedExport = directory.appending(path: "\(UUID().uuidString).mp4")
+        let interruptedSidecar = directory.appending(path:
+            interruptedExport.lastPathComponent + ".sb-partial")
+        let unrelated = directory.appending(path: "personal-export.mp4")
+        for file in [interruptedClip, interruptedRevision, interruptedExport,
+                     interruptedSidecar, unrelated] {
+            try Data([3]).write(to: file)
+        }
+        _ = ProjectStore(rootURL: root)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: interruptedClip.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: interruptedRevision.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: interruptedExport.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: interruptedSidecar.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: unrelated.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: preview.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: final.path))
+
         var renamed = restored.clips[0]
         renamed.title = "Better title"
         try store.updateClip(renamed, for: project.id)
@@ -117,6 +137,45 @@ final class AppStateTests: XCTestCase {
         XCTAssertTrue(ProjectStore(rootURL: root).projects[0].clips.isEmpty)
         XCTAssertFalse(FileManager.default.fileExists(atPath: newPreview.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: newFinal.path))
+    }
+
+    func testInvalidManifestDoesNotDeleteInterruptedOutputs() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "ClipHelm-Invalid-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        var draft = ProjectDraft()
+        draft.sourceName = "source.mov"
+        let project = try ProjectStore(rootURL: root).save(draft: draft)
+        let package = root.appending(path: "\(project.id.rawValue.uuidString).cliphelm")
+        let exports = package.appending(path: "Exports")
+        try FileManager.default.createDirectory(at: exports, withIntermediateDirectories: true)
+        let orphan = exports.appending(path: "clip-001-\(UUID().uuidString).mp4")
+        try Data([1]).write(to: orphan)
+        try Data("invalid".utf8).write(to: package.appending(path: "project.json"))
+
+        let reopened = ProjectStore(rootURL: root)
+        XCTAssertTrue(reopened.projects.isEmpty)
+        XCTAssertNotNil(reopened.loadError)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: orphan.path))
+    }
+
+    func testRecoveryDoesNotFollowExportsSymlink() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "ClipHelm-Symlink-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        var draft = ProjectDraft()
+        draft.sourceName = "source.mov"
+        let project = try ProjectStore(rootURL: root).save(draft: draft)
+        let external = root.appending(path: "OtherFiles")
+        try FileManager.default.createDirectory(at: external, withIntermediateDirectories: true)
+        let unrelated = external.appending(path: "clip-001-\(UUID().uuidString).mp4")
+        try Data([1]).write(to: unrelated)
+        let exports = root.appending(path: "\(project.id.rawValue.uuidString).cliphelm/Exports")
+        try FileManager.default.createSymbolicLink(at: exports, withDestinationURL: external)
+
+        let reopened = ProjectStore(rootURL: root)
+        XCTAssertEqual(reopened.projects.count, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: unrelated.path))
     }
 
     func testVersionThreeClipTitleMigratesFromProposal() throws {

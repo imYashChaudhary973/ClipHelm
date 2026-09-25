@@ -35,7 +35,13 @@ struct ClipResultsView: View {
                 Text("\(project.clips.count)").foregroundStyle(.secondary)
                 Spacer()
                 if !project.clips.isEmpty {
-                    Button("Select All") { selected = Set(project.clips.map(\.id)) }
+                    Button("Select All") {
+                        selected = Set(project.clips.filter { clip in
+                            guard let exportsDirectory else { return false }
+                            return FileManager.default.fileExists(atPath:
+                                exportsDirectory.appending(path: clip.finalFileName).path)
+                        }.map(\.id))
+                    }
                         .disabled(exporting)
                     Button("Export Selected (\(selected.count))") {
                         chooseExportFolder(for: project.clips.filter { selected.contains($0.id) })
@@ -100,6 +106,8 @@ struct ClipResultsView: View {
     private func resultRow(_ clip: ProjectClipRecord, directory: URL) -> some View {
         let preview = directory.appending(path: clip.previewFileName)
         let final = directory.appending(path: clip.finalFileName)
+        let hasPreview = FileManager.default.fileExists(atPath: preview.path)
+        let hasFinal = FileManager.default.fileExists(atPath: final.path)
         return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 12) {
                 Toggle("Select \(clip.title)", isOn: Binding(
@@ -107,7 +115,7 @@ struct ClipResultsView: View {
                     set: { if $0 { selected.insert(clip.id) } else { selected.remove(clip.id) } }
                 ))
                 .labelsHidden()
-                .disabled(exporting)
+                .disabled(exporting || !hasFinal)
                 ResultThumbnail(url: preview)
                     .frame(width: 106, height: 72)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
@@ -119,14 +127,18 @@ struct ClipResultsView: View {
                 }
                 Spacer(minLength: 0)
             }
+            if !hasPreview || !hasFinal {
+                Text("A generated file is missing. Reprocess the source or remove this clip from the project.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
             HStack {
                 Spacer()
                 Button("Play") { reviewing = ReviewSelection(clipID: clip.id, autoplay: true) }
-                    .disabled(!FileManager.default.fileExists(atPath: preview.path))
+                    .disabled(!hasPreview)
                 Button("Edit") { reviewing = ReviewSelection(clipID: clip.id, autoplay: false) }
-                    .disabled(!FileManager.default.fileExists(atPath: preview.path))
+                    .disabled(!hasPreview)
                 Button("Export") { chooseExportFolder(for: [clip]) }
-                    .disabled(exporting || !FileManager.default.fileExists(atPath: final.path))
+                    .disabled(exporting || !hasFinal)
                 Menu {
                     Button("Delete from Project", role: .destructive) { deleting = clip.id }
                 } label: {

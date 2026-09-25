@@ -38,6 +38,31 @@ final class TranscriptEngineTests: XCTestCase {
         try XCTUnwrap(Bundle.module.url(forResource: name, withExtension: "mp4"))
     }
 
+    func testAppleSpeechBoundsSmallChunkOverrun() throws {
+        let bounded = try AppleSpeechBackend.boundedRange(
+            start: 49_800_000, end: 50_160_000, maximumTime: 50_000_000)
+        XCTAssertEqual(bounded?.end.microseconds, 50_000_000)
+        XCTAssertNil(try AppleSpeechBackend.boundedRange(
+            start: 50_050_000, end: 50_160_000, maximumTime: 50_000_000))
+        XCTAssertThrowsError(try AppleSpeechBackend.boundedRange(
+            start: 49_800_000, end: 51_000_000, maximumTime: 50_000_000))
+    }
+
+    @MainActor
+    func testOptInRealOnDeviceSpeechProfile() async throws {
+        guard let path = ProcessInfo.processInfo.environment["CLIPHELM_QA_SPEECH_SOURCE"] else {
+            throw XCTSkip("Set CLIPHELM_QA_SPEECH_SOURCE to an authorized speech MP4")
+        }
+        let source = URL(fileURLWithPath: path)
+        let asset = try await MediaProbe().probe(fileURL: source, displayName: "QA speech").asset
+        let started = Date()
+        let transcript = try await TranscriptEngine().transcribe(
+            sourceURL: source, asset: asset, backend: AppleSpeechBackend())
+        print("QA_ON_DEVICE_TRANSCRIPTION_SECONDS=\(Date().timeIntervalSince(started))")
+        print("QA_TRANSCRIPT_WORDS=\(transcript.words.count)")
+        XCTAssertTrue(transcript.hasMeaningfulSpeech)
+    }
+
     func testSilentSourcesSkipBackend() async throws {
         for name in ["valid", "silent-audio"] {
             let source = try fixture(name)

@@ -1,5 +1,6 @@
 import Foundation
 import Speech
+import AVFoundation
 import ClipHelmCore
 
 @MainActor
@@ -10,13 +11,20 @@ public final class AppleSpeechBackend: TranscriptionBackend {
 
     public func transcribe(audioURL: URL) async throws -> [TranscriptWord] {
         let status = await withCheckedContinuation { continuation in
-            SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0) }
+            SFSpeechRecognizer.requestAuthorization { @Sendable status in
+                continuation.resume(returning: status)
+            }
         }
         guard status == .authorized else { throw TranscriptEngineError.permissionDenied }
         guard let recognizer = SFSpeechRecognizer(locale: .current),
               recognizer.isAvailable, recognizer.supportsOnDeviceRecognition else {
             throw TranscriptEngineError.unavailable
         }
+        let audioDuration = try await AVURLAsset(url: audioURL).load(.duration).seconds
+        guard audioDuration.isFinite, audioDuration > 0, audioDuration <= 50.5 else {
+            throw TranscriptEngineError.audioUnreadable
+        }
+        let maximumTime = Int64((audioDuration * 1_000_000).rounded())
         let request = SFSpeechURLRecognitionRequest(url: audioURL)
         request.requiresOnDeviceRecognition = true
         request.shouldReportPartialResults = false
@@ -25,9 +33,9 @@ public final class AppleSpeechBackend: TranscriptionBackend {
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 completion.setContinuation(continuation)
-                let task = recognizer.recognitionTask(with: request) { result, error in
+                let task = recognizer.recognitionTask(with: request) { @Sendable result, error in
                     if let result, result.isFinal {
-                        do { completion.finish(.success(try Self.words(from: result))) }
+                        do { completion.finish(.success(try Self.words(from: result, maximumTime: maximumTime))) }
                         catch { completion.finish(.failure(TranscriptEngineError.invalidWordTimings)) }
                     } else if error != nil {
                         completion.finish(.failure(TranscriptEngineError.unavailable))
@@ -40,7 +48,8 @@ public final class AppleSpeechBackend: TranscriptionBackend {
         }
     }
 
-    nonisolated private static func words(from result: SFSpeechRecognitionResult) throws -> [TranscriptWord] {
+    nonisolated private static func words(from result: SFSpeechRecognitionResult,
+                                          maximumTime: Int64) throws -> [TranscriptWord] {
         var words: [TranscriptWord] = []
         for segment in result.bestTranscription.segments {
             let tokens = segment.substring.split(whereSeparator: \.isWhitespace).map(String.init)
@@ -55,14 +64,25 @@ public final class AppleSpeechBackend: TranscriptionBackend {
                 let first = start + duration * Int64(preceding) / Int64(total)
                 preceding += token.count
                 let last = start + duration * Int64(preceding) / Int64(total)
-                guard last > first else { continue }
-                words.append(try TranscriptWord(text: token,
-                    range: MediaTimeRange(start: MediaTime(microseconds: first),
-                                          end: MediaTime(microseconds: last)),
-                    confidence: Double(segment.confidence)))
+                if let range = try boundedRange(start: first, end: last, maximumTime: maximumTime) {
+                    words.append(try TranscriptWord(text: token, range: range,
+                        confidence: Double(segment.confidence)))
+                }
             }
         }
         return words
+    }
+
+    nonisolated static func boundedRange(start: Int64, end: Int64,
+                                          maximumTime: Int64) throws -> MediaTimeRange? {
+        // Apple Speech can place the final word slightly beyond an extracted chunk.
+        guard start >= 0, end > start,
+              end <= maximumTime + 500_000 else {
+            throw TranscriptEngineError.invalidWordTimings
+        }
+        guard start < maximumTime else { return nil }
+        return try MediaTimeRange(start: MediaTime(microseconds: start),
+                                  end: MediaTime(microseconds: min(end, maximumTime)))
     }
 }
 

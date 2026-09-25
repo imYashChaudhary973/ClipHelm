@@ -265,7 +265,7 @@ struct AppShell: View {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(project.title).font(.title2.weight(.semibold))
-                    Text(project.clips.isEmpty ? "Project workspace" : "\(project.clips.count) clips ready")
+                    Text(project.clips.isEmpty ? "Project workspace" : "\(project.clips.count) clips saved")
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -305,7 +305,7 @@ struct AppShell: View {
     private func inspector(_ project: ProjectRecord) -> some View {
         Form {
             Section("Project") {
-                LabeledContent("Status", value: project.clips.isEmpty ? "Draft" : "\(project.clips.count) clips ready")
+                LabeledContent("Status", value: project.clips.isEmpty ? "Draft" : "\(project.clips.count) clips saved")
                 LabeledContent("Source", value: project.sourceLabel)
                 LabeledContent("Type", value: project.sourceKind.rawValue)
                 if let asset = project.mediaAsset {
