@@ -3,6 +3,7 @@ import SwiftUI
 import ClipHelmCore
 import ClipHelmEditing
 import ClipHelmProcessing
+import ClipHelmSources
 
 enum SourceKind: String, Codable, CaseIterable, Identifiable {
     case local = "Local video"
@@ -10,6 +11,9 @@ enum SourceKind: String, Codable, CaseIterable, Identifiable {
     case youtube = "YouTube URL"
 
     var id: String { rawValue }
+    static var availableCases: [SourceKind] {
+        allCases.filter { $0 != .directURL || SourceImportPolicy.directURLImportEnabled }
+    }
 }
 
 enum CanvasPreset: String, Codable, CaseIterable, Identifiable {
@@ -64,7 +68,9 @@ struct ProjectDraft: Codable, Equatable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         title = try c.decode(String.self, forKey: .title)
-        sourceKind = try c.decode(SourceKind.self, forKey: .sourceKind)
+        let savedSourceKind = try c.decode(SourceKind.self, forKey: .sourceKind)
+        sourceKind = savedSourceKind == .directURL && !SourceImportPolicy.directURLImportEnabled
+            ? .local : savedSourceKind
         preset = try c.decode(CanvasPreset.self, forKey: .preset)
         resolution = try c.decodeIfPresent(RenderResolution.self, forKey: .resolution) ?? .hd1080
         framingMode = try c.decode(FramingMode.self, forKey: .framingMode)

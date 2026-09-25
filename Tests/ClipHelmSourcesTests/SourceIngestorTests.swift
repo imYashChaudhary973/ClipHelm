@@ -53,6 +53,35 @@ private final class SlowDownloadProtocol: URLProtocol {
 }
 
 final class SourceIngestorTests: XCTestCase {
+    func testExternalBuildGateRejectsDirectURLsBeforeDNSOrNetwork() async throws {
+        XCTAssertFalse(SourceImportPolicy.directURLImportEnabled)
+#if DEBUG
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [DownloadProtocol.self]
+        let ingestor = SourceIngestor(temporaryDirectory: FileManager.default.temporaryDirectory,
+            directConfiguration: configuration, hostResolver: { _ in
+                XCTFail("The disabled path must not resolve DNS")
+                return true
+            }, allowUnsafeDirectURLForTests: false)
+        let priorRequests = DownloadProtocol.state.count()
+#else
+        let ingestor = SourceIngestor()
+#endif
+        for raw in ["https://media.example.com/video.mp4", "https://0x7f.0.0.1/video.mp4",
+                    "https://2130706433.example.com/video.mp4"] {
+            let descriptor = try SourceDescriptor(remoteURL: raw, youtube: false, authorized: true)
+            do {
+                _ = try await ingestor.prepare(descriptor)
+                XCTFail("Direct import must be disabled: \(raw)")
+            } catch let error as SourceIngestError {
+                XCTAssertEqual(error, .directURLDisabled)
+            }
+        }
+#if DEBUG
+        XCTAssertEqual(DownloadProtocol.state.count(), priorRequests)
+#endif
+    }
+
     func testLocalMediaValidationAndMetadata() async throws {
         let file = try XCTUnwrap(Bundle.module.url(forResource: "valid", withExtension: "mp4"))
         let ingestor = SourceIngestor()
@@ -77,7 +106,11 @@ final class SourceIngestorTests: XCTestCase {
     func testRemoteDescriptorRejectsUnsafeAndUnauthorizedLinks() throws {
         XCTAssertThrowsError(try SourceDescriptor(remoteURL: "https://example.com/video.mp4",
                                                    youtube: false, authorized: false))
-        for link in ["http://example.com/video.mp4", "https://127.0.0.1/video.mp4",
+        for link in ["http://example.com/video.mp4", "file:///tmp/video.mp4",
+                     "ftp://example.com/video.mp4", "data:video/mp4;base64,AA",
+                     "https://127.0.0.1/video.mp4", "https://10.0.0.1/video.mp4",
+                     "https://169.254.169.254/video.mp4", "https://[::1]/video.mp4",
+                     "https://[fc00::1]/video.mp4", "https://[fe80::1]/video.mp4",
                      "https://localhost/video.mp4", "https://user:pass@example.com/video.mp4",
                      "https://youtube.com.evil.example/watch?v=abcdefghijk"] {
             XCTAssertThrowsError(try SourceDescriptor(remoteURL: link, youtube: link.contains("youtube"),
@@ -91,6 +124,7 @@ final class SourceIngestorTests: XCTestCase {
         XCTAssertEqual(direct.displayLabel, "media.example.com")
     }
 
+#if DEBUG
     func testDirectDownloadIsValidatedAndReused() async throws {
         let fixture = try XCTUnwrap(Bundle.module.url(forResource: "valid", withExtension: "mp4"))
         DownloadProtocol.state.body = try Data(contentsOf: fixture)
@@ -111,6 +145,7 @@ final class SourceIngestorTests: XCTestCase {
         let permissions = try FileManager.default.attributesOfItem(atPath: first.fileURL.path)[.posixPermissions] as? NSNumber
         XCTAssertEqual(permissions?.intValue, 0o600)
     }
+#endif
 
     func testYouTubeAdapterUsesCanonicalPublicURLAndValidatesMedia() async throws {
         let fixture = try XCTUnwrap(Bundle.module.url(forResource: "valid", withExtension: "mp4"))
@@ -137,6 +172,7 @@ final class SourceIngestorTests: XCTestCase {
         XCTAssertTrue(observed.hasMeasuredProgress())
     }
 
+#if DEBUG
     func testDirectDownloadCancellation() async throws {
         let fixture = try XCTUnwrap(Bundle.module.url(forResource: "valid", withExtension: "mp4"))
         DownloadProtocol.state.body = try Data(contentsOf: fixture)
@@ -154,4 +190,5 @@ final class SourceIngestorTests: XCTestCase {
             XCTFail("Canceled download must not yield a source")
         } catch is CancellationError { }
     }
+#endif
 }

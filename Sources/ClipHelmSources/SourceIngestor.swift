@@ -115,6 +115,7 @@ public actor SourceIngestor {
     private let youtubeExecutable: URL?
     private let directConfiguration: URLSessionConfiguration?
     private let hostResolver: @Sendable (String) -> Bool
+    private let directURLImportEnabled: Bool
     private var completed: [SourceDescriptor: PreparedSource] = [:]
     private var active: Set<SourceDescriptor> = []
     private var sweptTemporaryStorage = false
@@ -126,16 +127,21 @@ public actor SourceIngestor {
         self.youtubeExecutable = youtubeExecutable
         directConfiguration = nil
         hostResolver = Self.resolvesOnlyToPublicAddresses
+        directURLImportEnabled = SourceImportPolicy.directURLImportEnabled
     }
 
+#if DEBUG
     init(temporaryDirectory: URL, directConfiguration: URLSessionConfiguration,
-         hostResolver: @escaping @Sendable (String) -> Bool) {
+         hostResolver: @escaping @Sendable (String) -> Bool,
+         allowUnsafeDirectURLForTests: Bool = true) {
         directory = temporaryDirectory.appending(path: "ClipHelmSources", directoryHint: .isDirectory)
             .appending(path: UUID().uuidString, directoryHint: .isDirectory)
         youtubeExecutable = nil
         self.directConfiguration = directConfiguration
         self.hostResolver = hostResolver
+        directURLImportEnabled = allowUnsafeDirectURLForTests
     }
+#endif
 
     deinit { try? FileManager.default.removeItem(at: directory) }
 
@@ -144,6 +150,9 @@ public actor SourceIngestor {
         progress: @escaping @Sendable (SourceProgress) -> Void = { _ in }
     ) async throws -> PreparedSource {
         try Task.checkCancellation()
+        if descriptor.kind == .directVideo && !directURLImportEnabled {
+            throw SourceIngestError.directURLDisabled
+        }
         if let existing = completed[descriptor], FileManager.default.fileExists(atPath: existing.fileURL.path) {
             return existing
         }

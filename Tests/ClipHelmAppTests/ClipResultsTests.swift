@@ -6,6 +6,26 @@ import ClipHelmProcessing
 @testable import ClipHelmApp
 
 final class ClipResultsTests: XCTestCase {
+    func testBatchExportRejectsInsufficientDiskSpaceWithoutPartialFile() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "ClipHelm-full-disk-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appending(path: "ProjectExports")
+        let destination = root.appending(path: "Destination")
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        let clip = source.appending(path: "clip.mp4")
+        try Data("video".utf8).write(to: clip)
+        let exporter = ClipExporter(availableBytes: { _ in 0 })
+        do {
+            _ = try await exporter.export([ClipExportItem(title: "Clip", fileURL: clip)],
+                                          from: source, to: destination)
+            XCTFail("Export must reject a full destination")
+        } catch let error as ClipExportError {
+            guard case .insufficientDiskSpace = error else { XCTFail("Wrong error: \(error)"); return }
+        }
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: destination.path), [])
+    }
+
     func testBatchExportSanitizesNamesAvoidsOverwriteAndRollsBackOnError() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "ClipHelm-export-test-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }

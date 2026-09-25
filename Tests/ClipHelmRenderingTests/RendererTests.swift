@@ -51,6 +51,10 @@ final class RendererTests: XCTestCase {
         XCTAssertEqual(audio.count, 1)
         let duration = try await rendered.load(.duration).seconds
         XCTAssertEqual(duration, 0.8, accuracy: 0.1)
+        let videoTime = try await tracks[0].load(.timeRange)
+        let audioTime = try await audio[0].load(.timeRange)
+        XCTAssertEqual(videoTime.start.seconds, audioTime.start.seconds, accuracy: 0.05)
+        XCTAssertEqual(videoTime.duration.seconds, audioTime.duration.seconds, accuracy: 0.15)
         let size = try await MediaProbe().probe(fileURL: output, displayName: "Output").asset
         XCTAssertEqual(size.width, 1080)
         XCTAssertEqual(size.height, 1920)
@@ -71,6 +75,8 @@ final class RendererTests: XCTestCase {
         let previewAsset = try await MediaProbe().probe(fileURL: preview, displayName: "Preview").asset
         XCTAssertEqual(previewAsset.width, 540)
         XCTAssertEqual(previewAsset.height, 960)
+        let previewDuration = try await AVURLAsset(url: preview).load(.duration).seconds
+        XCTAssertEqual(previewDuration, duration, accuracy: 0.1)
     }
 
     func testFourKLandscapeExport() async throws {

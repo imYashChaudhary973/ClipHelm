@@ -14,13 +14,21 @@ private final class StubState: @unchecked Sendable {
     private var body = Data(#"{"data":{}}"#.utf8)
     private var requests: [URLRequest] = []
     private var requestBodies: [Data] = []
+    private var failure: URLError?
 
     func configure(status: Int, body: Data) {
         lock.lock()
         self.status = status
         self.body = body
+        failure = nil
         requests = []
         requestBodies = []
+        lock.unlock()
+    }
+
+    func configureFailure(_ error: URLError) {
+        lock.lock()
+        failure = error
         lock.unlock()
     }
 
@@ -55,6 +63,11 @@ private final class StubState: @unchecked Sendable {
         defer { lock.unlock() }
         return requestBodies.last
     }
+
+    func currentFailure() -> URLError? {
+        lock.lock(); defer { lock.unlock() }
+        return failure
+    }
 }
 
 private final class StubURLProtocol: URLProtocol {
@@ -65,6 +78,10 @@ private final class StubURLProtocol: URLProtocol {
     override func stopLoading() { }
 
     override func startLoading() {
+        if let failure = Self.state.currentFailure() {
+            client?.urlProtocol(self, didFailWithError: failure)
+            return
+        }
         let (status, body) = Self.state.response(for: request)
         guard let url = request.url,
               let response = HTTPURLResponse(url: url, statusCode: status,
@@ -109,6 +126,38 @@ final class OpenRouterInfrastructureTests: XCTestCase {
             XCTFail("Expected bounded response rejection")
         } catch let error as OpenRouterGatewayError {
             XCTAssertEqual(error, .invalidResponse)
+        }
+    }
+
+    func testConnectionFailuresRemainSanitized() async throws {
+        let gateway = stubbedGateway()
+        for (status, expected) in [(403, OpenRouterGatewayError.invalidKey),
+                                   (402, .insufficientCredits), (429, .rateLimited),
+                                   (500, .serviceUnavailable)] {
+            StubURLProtocol.state.configure(status: status,
+                body: Data(#"{"error":"unit-test-token secret response"}"#.utf8))
+            do {
+                try await gateway.testConnection()
+                XCTFail("HTTP \(status) must fail")
+            } catch let error as OpenRouterGatewayError {
+                XCTAssertEqual(error, expected)
+                XCTAssertFalse(error.localizedDescription.contains("unit-test-token"))
+                XCTAssertFalse(error.localizedDescription.contains("secret response"))
+            }
+        }
+        StubURLProtocol.state.configure(status: 200, body: Data("not JSON".utf8))
+        do {
+            try await gateway.testConnection()
+            XCTFail("Malformed responses must fail")
+        } catch let error as OpenRouterGatewayError {
+            XCTAssertEqual(error, .invalidResponse)
+        }
+        StubURLProtocol.state.configureFailure(URLError(.notConnectedToInternet))
+        do {
+            try await gateway.testConnection()
+            XCTFail("Network loss must fail")
+        } catch let error as OpenRouterGatewayError {
+            XCTAssertEqual(error, .networkUnavailable)
         }
     }
 
