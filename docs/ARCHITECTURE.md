@@ -4,7 +4,7 @@ ClipHelm is a local-first native macOS editor. Its own pipeline owns media, time
 
 ## Module boundaries
 
-Dependencies point downward. `ClipHelmCore`, `ClipHelmSecurity`, `ClipHelmOpenRouter`, `ClipHelmMedia`, `ClipHelmSources`, `ClipHelmTranscription`, `ClipHelmAnalysis`, `ClipHelmMoments`, `ClipHelmFraming`, `ClipHelmFramingVision`, `ClipHelmLayouts`, `ClipHelmLayoutVision`, `ClipHelmEditing`, and the `ClipHelmApp` shell are implemented targets. The remaining modules are design boundaries for later phases.
+Dependencies point downward. `ClipHelmCore`, `ClipHelmSecurity`, `ClipHelmOpenRouter`, `ClipHelmMedia`, `ClipHelmSources`, `ClipHelmTranscription`, `ClipHelmAnalysis`, `ClipHelmMoments`, `ClipHelmFraming`, `ClipHelmFramingVision`, `ClipHelmLayouts`, `ClipHelmLayoutVision`, `ClipHelmPacing`, `ClipHelmEditing`, and the `ClipHelmApp` shell are implemented targets. The remaining modules are design boundaries for later phases.
 
 | Module | Owns | May depend on |
 | --- | --- | --- |
@@ -22,9 +22,9 @@ Dependencies point downward. `ClipHelmCore`, `ClipHelmSecurity`, `ClipHelmOpenRo
 | Framing Vision | Optional uncertain-shot classification on selected JPEG frames | Core, Analysis, Framing, Media, OpenRouter |
 | Layouts | On-device screen subtype detection and stable shot-layout planning | Core, Analysis, Media |
 | Layout Vision | Optional subtype classification for uncertain screen segments | Core, Analysis, Layouts, Media, OpenRouter |
-| Pacing | Dead-air, pause and filler cut proposals | Core, Transcription, Analysis |
+| Pacing | Speech-safe dead-air, long-pause and filler removal proposals | Core, Analysis |
 | Captions | Word segmentation and style timing | Core, Transcription |
-| Editing | Implemented `ClipHelmEditing`: deterministic planning, source/edited timeline mapping, spec validation, typed operations, and in-memory undo/redo | Core, Analysis, Framing, Layouts |
+| Editing | Implemented `ClipHelmEditing`: deterministic planning, source/edited timeline mapping, spec validation, typed operations, and in-memory undo/redo | Core, Analysis, Framing, Layouts, Pacing |
 | Rendering | Preview/export compiler, AVFoundation/VideoToolbox; optional FFmpeg adapter | Core, Media, Editing |
 | SharedUI | Reusable SwiftUI controls and presentation | Core, SwiftUI |
 
@@ -54,6 +54,8 @@ Phase 11 adds seven typed `ShotLayout` choices and source-time `LayoutCue` entri
 
 `ScreenContentDetector` samples at most 12 likely screen windows, runs fast macOS Vision text recognition locally with progress and cancellation, and emits bounded, uncertain labels for IDE/code, browser demos, slides, software UI, and generic screen shares. These are heuristics; OCR may miss small or stylized text. `ClipHelmLayoutVision` can send only two reduced JPEGs from at most three uncertain screen windows when the user enables AI Vision and selects a structured vision model. OpenRouter returns a subtype and confidence only; ClipHelm validates the response and chooses layouts locally. The current app has no clip-processing or manual-edit UI, so these services and typed overrides are not yet invoked by an interactive review workflow.
 
+Phase 12 adds provider-free `ClipHelmPacing`. `DeadAirDetector`, `LongPauseTrimmer`, and `FillerWordDetector` produce typed source-time `ProposedRemoval` values. `PacingPlanner` checks transcript words, audio activity, sentence punctuation, speaker changes, scene changes, and screen/demo evidence before accepting them. Natural, Balanced, Tight, and Fast retain different contextual pause lengths; there is no single silence threshold that decides every cut. Filler cuts require isolated, short, confidently recognized hesitation words. Keep Demos protects locally classified or signaled screen activity and validated screen hints. `ClipPlanner` converts accepted removals to retained `ClipHelmEditSpec` segments, so captions and the edited timeline follow the same cuts. The app still has no interactive clip-processing or render workflow; acoustic joins cannot be evaluated until rendering exists.
+
 ## Data flow
 
 ```text
@@ -76,4 +78,4 @@ Clip discovery may ask OpenRouter for meaning and ranking, but local evidence su
 - V1 UI offers 9:16 and 16:9. `OutputFormat` stores dimensions so 1:1, 4:5, and custom canvases can be added without changing the time model.
 - Captions are based on word timings and may animate per word or blur in. When no meaningful speech exists, the planner leaves captions disabled by default.
 
-Filler cleanup, clip rendering, and final export remain later phases.
+Clip rendering and final export remain later phases.

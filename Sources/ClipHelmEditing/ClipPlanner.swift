@@ -3,6 +3,7 @@ import ClipHelmCore
 import ClipHelmAnalysis
 import ClipHelmFraming
 import ClipHelmLayouts
+import ClipHelmPacing
 
 /// Converts validated suggestions and local evidence into renderer-independent decisions.
 public struct ClipPlanner: Sendable {
@@ -26,9 +27,15 @@ public struct ClipPlanner: Sendable {
         let range = intent?.suggestedRange ?? proposal.range
         var retained: [MediaTimeRange] = []
         var cursor = range.start
-        for cut in try pauseCuts(in: range, configuration: configuration,
-                                 analysis: analysis, screenHints: screenHints,
-                                 preserveDemo: intent?.preserveDemo == true) {
+        let protectDemos = configuration.smartEdit.keepDemos || intent?.preserveDemo == true
+        let protectedScreens = protectDemos
+            ? screenHints.filter { $0.kind != .unknown && $0.confidence >= 0.6 }.map(\.range)
+            : []
+        let removals = try PacingPlanner().propose(in: range, asset: asset,
+            configuration: configuration, analysis: analysis, transcript: transcript,
+            protectedRanges: protectedScreens, preserveDemos: intent?.preserveDemo == true)
+        for removal in removals {
+            let cut = removal.range
             if cursor < cut.start {
                 retained.append(try MediaTimeRange(start: cursor, end: cut.start))
             }
@@ -77,52 +84,6 @@ public struct ClipPlanner: Sendable {
                                        layoutCues: layoutCues)
         try EditSpecValidator().validate(spec, for: asset, proposal: proposal)
         return spec
-    }
-
-    private func pauseCuts(in range: MediaTimeRange, configuration: ClipConfiguration,
-                           analysis: AnalysisResult, screenHints: [ScreenContentHint],
-                           preserveDemo: Bool) throws -> [MediaTimeRange] {
-        let thresholds: (edge: Int64, middle: Int64)
-        switch configuration.pacingMode {
-        case .natural: thresholds = (2_000_000, 3_000_000)
-        case .balanced: thresholds = (1_200_000, 2_000_000)
-        case .tight: thresholds = (700_000, 1_200_000)
-        case .fast: thresholds = (400_000, 800_000)
-        }
-        var cuts: [MediaTimeRange] = []
-        for signal in analysis.signals where signal.kind == .pause &&
-            signal.strength >= 0.75 && signal.confidence >= 0.65 {
-            guard let pause = try intersection(signal.range, range) else { continue }
-            let atEdge = pause.start == range.start || pause.end == range.end
-            guard atEdge ? configuration.smartEdit.cutDeadAir : configuration.smartEdit.trimLongPauses,
-                  pause.durationMicroseconds >= (atEdge ? thresholds.edge : thresholds.middle) else {
-                continue
-            }
-            if configuration.smartEdit.keepDemos || preserveDemo {
-                let classified = analysis.classifications.contains {
-                    [.demo, .screenShare, .presentation].contains($0.kind) && $0.confidence >= 0.45 &&
-                    $0.range.start < pause.end && pause.start < $0.range.end
-                }
-                let visibleScreen = analysis.signals.contains {
-                    $0.kind == .screenContent && $0.strength * $0.confidence >= 0.3 &&
-                    $0.range.start < pause.end && pause.start < $0.range.end
-                }
-                let detectedScreen = screenHints.contains {
-                    $0.kind != .unknown && $0.confidence >= 0.6 &&
-                    $0.range.start < pause.end && pause.start < $0.range.end
-                }
-                if classified || visibleScreen || detectedScreen { continue }
-            }
-            if atEdge {
-                cuts.append(pause)
-            } else {
-                let breathingRoom: Int64 = 200_000
-                cuts.append(try MediaTimeRange(
-                    start: MediaTime(microseconds: pause.start.microseconds + breathingRoom),
-                    end: MediaTime(microseconds: pause.end.microseconds - breathingRoom)))
-            }
-        }
-        return cuts.sorted { $0.start < $1.start }
     }
 
     private func captionTrack(transcript: Transcript?, segments: [EditSegment],
