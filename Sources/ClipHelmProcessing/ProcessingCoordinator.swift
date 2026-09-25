@@ -210,28 +210,36 @@ public struct ProcessingCoordinator: Sendable {
                 previewURL: outputDirectory.appending(path: stem + "-preview.mp4"),
                 finalURL: outputDirectory.appending(path: stem + ".mp4"))
         }
-        for (index, clip) in jobs.enumerated() {
-            try Task.checkCancellation()
-            progress(.init(stage: .renderingPreviews,
-                fraction: Double(index) / Double(planCount), detail: "Preview \(index + 1) of \(planCount)"))
-            _ = try await renderer.render(clip.spec, sourceURL: source.fileURL,
-                asset: source.asset, outputURL: clip.previewURL, quality: .preview) { update in
+        do {
+            for (index, clip) in jobs.enumerated() {
+                try Task.checkCancellation()
                 progress(.init(stage: .renderingPreviews,
-                    fraction: (Double(index) + update.fraction) / Double(planCount)))
+                    fraction: Double(index) / Double(planCount), detail: "Preview \(index + 1) of \(planCount)"))
+                _ = try await renderer.render(clip.spec, sourceURL: source.fileURL,
+                    asset: source.asset, outputURL: clip.previewURL, quality: .preview) { update in
+                    progress(.init(stage: .renderingPreviews,
+                        fraction: (Double(index) + update.fraction) / Double(planCount)))
+                }
             }
-        }
-        for (index, clip) in jobs.enumerated() {
-            try Task.checkCancellation()
-            progress(.init(stage: .renderingFinals,
-                fraction: Double(index) / Double(planCount), detail: "Final clip \(index + 1) of \(planCount)"))
-            _ = try await renderer.render(clip.spec, sourceURL: source.fileURL,
-                asset: source.asset, outputURL: clip.finalURL) { update in
+            for (index, clip) in jobs.enumerated() {
+                try Task.checkCancellation()
                 progress(.init(stage: .renderingFinals,
-                    fraction: (Double(index) + update.fraction) / Double(planCount)))
+                    fraction: Double(index) / Double(planCount), detail: "Final clip \(index + 1) of \(planCount)"))
+                _ = try await renderer.render(clip.spec, sourceURL: source.fileURL,
+                    asset: source.asset, outputURL: clip.finalURL) { update in
+                    progress(.init(stage: .renderingFinals,
+                        fraction: (Double(index) + update.fraction) / Double(planCount)))
+                }
             }
+            progress(.init(stage: .complete, fraction: 1))
+            return .init(source: source, transcript: transcript, analysis: analysis,
+                         clips: jobs, explanation: discovery.explanation)
+        } catch {
+            for clip in jobs {
+                try? FileManager.default.removeItem(at: clip.previewURL)
+                try? FileManager.default.removeItem(at: clip.finalURL)
+            }
+            throw error
         }
-        progress(.init(stage: .complete, fraction: 1))
-        return .init(source: source, transcript: transcript, analysis: analysis,
-                     clips: jobs, explanation: discovery.explanation)
     }
 }

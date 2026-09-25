@@ -74,4 +74,48 @@ final class ProcessingTests: XCTestCase {
         XCTAssertEqual(proposalCount, 0)
         XCTAssertEqual(framingCount, 0)
     }
+
+    func testCancellationBeforeFinalRenderRemovesOnlyThisRunsFiles() async throws {
+        let file = try XCTUnwrap(Bundle.module.url(forResource: "silent-motion", withExtension: "mp4"))
+        let ingestor = SourceIngestor()
+        let source = try await ingestor.prepare(SourceDescriptor(localFile: file))
+        let configuration = try ClipConfiguration(outputFormat: .vertical,
+            framingMode: .classicFullFrame, pacingMode: .natural,
+            selectedLengths: [.seconds10to30], requestedClipCount: 1,
+            soundMode: .mute, captionStyle: nil,
+            smartEdit: SmartEditOptions(useVisionForTrickyShots: false,
+                cutDeadAir: false, trimLongPauses: false, cleanFillers: false, keepDemos: false))
+        let directory = FileManager.default.temporaryDirectory.appending(path: "ClipHelm-recovery-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let output = directory.appending(path: "Exports")
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let existing = output.appending(path: "already-accepted.mp4")
+        try Data("keep".utf8).write(to: existing)
+        let gateway = MockOpenRouterGateway()
+        let registry = OpenRouterModelRegistry(gateway: gateway)
+        let coordinator = ProcessingCoordinator(ingestor: ingestor,
+            momentEngine: MomentEngine(minimumQuality: 0))
+        let cancelledRun = Task {
+            try await coordinator.run(prepared: source, expectedAsset: source.asset,
+                configuration: configuration, cacheDirectory: directory.appending(path: "Cache"),
+                outputDirectory: output, backend: UnusedBackend(), modelID: nil,
+                gateway: gateway, registry: registry) { update in
+                    if update.stage == .renderingFinals && update.fraction == 0 {
+                        withUnsafeCurrentTask { $0?.cancel() }
+                    }
+                }
+        }
+        do {
+            _ = try await cancelledRun.value
+            XCTFail("Cancelled render must not return completed clips")
+        } catch is CancellationError { }
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: output.path),
+                       [existing.lastPathComponent])
+        let recovered = try await coordinator.run(prepared: source, expectedAsset: source.asset,
+            configuration: configuration, cacheDirectory: directory.appending(path: "Cache"),
+            outputDirectory: output, backend: UnusedBackend(), modelID: nil,
+            gateway: gateway, registry: registry)
+        XCTAssertEqual(recovered.clips.count, 1)
+        XCTAssertEqual(try Data(contentsOf: existing), Data("keep".utf8))
+    }
 }

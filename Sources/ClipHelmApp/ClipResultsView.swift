@@ -193,7 +193,9 @@ private struct ResultThumbnail: View {
         .task(id: url) {
             image = nil
             guard FileManager.default.fileExists(atPath: url.path) else { return }
-            let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+            let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url, options: [
+                AVURLAssetReferenceRestrictionsKey: AVAssetReferenceRestrictions.forbidAll.rawValue
+            ]))
             generator.appliesPreferredTrackTransform = true
             generator.maximumSize = CGSize(width: 320, height: 180)
             if let (frame, _) = try? await generator.image(at: .zero) {
@@ -267,7 +269,8 @@ struct ClipReviewView: View {
         self.deleteClip = deleteClip
         self.autoplay = autoplay
         _current = State(initialValue: clip)
-        _player = State(initialValue: AVPlayer(url: exportsDirectory.appending(path: clip.previewFileName)))
+        _player = State(initialValue: AVPlayer(playerItem: Self.localItem(
+            exportsDirectory.appending(path: clip.previewFileName))))
         _title = State(initialValue: clip.title)
         _framing = State(initialValue: clip.spec.framingMode)
         _pacing = State(initialValue: clip.spec.pacingMode)
@@ -498,7 +501,7 @@ struct ClipReviewView: View {
                         focusY = rect.y + rect.height / 2
                     }
                     player.pause()
-                    player.replaceCurrentItem(with: AVPlayerItem(url: preview))
+                    player.replaceCurrentItem(with: Self.localItem(preview))
                     renderFraction = 1
                     message = "Changes saved. Preview the new clip before exporting."
                 } catch is CancellationError {
@@ -518,5 +521,11 @@ struct ClipReviewView: View {
         } catch {
             message = "The trim range is invalid."
         }
+    }
+
+    private static func localItem(_ url: URL) -> AVPlayerItem {
+        AVPlayerItem(asset: AVURLAsset(url: url, options: [
+            AVURLAssetReferenceRestrictionsKey: AVAssetReferenceRestrictions.forbidAll.rawValue
+        ]))
     }
 }

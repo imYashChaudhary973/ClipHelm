@@ -72,6 +72,7 @@ public struct TranscriptEngine: Sendable {
                 if try await AudioExtractor().hasSound(fileURL: audio) {
                     progress(.init(stage: .transcribing, fraction: Double(start) / Double(total)))
                     let relative = try await backend.transcribe(audioURL: audio)
+                    try Task.checkCancellation()
                     for word in relative {
                         guard word.range.end.microseconds <= range.durationMicroseconds else {
                             throw TranscriptEngineError.invalidWordTimings
@@ -91,6 +92,7 @@ public struct TranscriptEngine: Sendable {
             start = end
             progress(.init(stage: .transcribing, fraction: Double(start) / Double(total)))
         }
+        try Task.checkCancellation()
         let ordered = words.sorted { $0.range.start < $1.range.start }
         return try Transcript(assetID: asset.id, segments: Self.makeSegments(ordered))
     }

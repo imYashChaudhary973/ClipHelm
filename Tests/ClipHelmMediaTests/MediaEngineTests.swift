@@ -116,6 +116,7 @@ final class MediaEngineTests: XCTestCase {
             _ = try await job.value
             XCTFail("Canceled proxy must not complete")
         } catch is CancellationError { }
-        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: output.path).isEmpty)
+        let remaining = try FileManager.default.contentsOfDirectory(atPath: output.path)
+        XCTAssertTrue(remaining.isEmpty, "Canceled proxy left: \(remaining)")
     }
 }

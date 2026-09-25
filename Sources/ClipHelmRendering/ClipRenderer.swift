@@ -119,16 +119,15 @@ public struct ClipRenderer: Sendable {
         }
         defer { observer.cancel() }
         do {
-            try await withTaskCancellationHandler {
-                try await box.export(to: temporary)
-            } onCancel: { box.cancel() }
+            try await box.export(to: temporary)
             try Task.checkCancellation()
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporary.path)
             try FileManager.default.moveItem(at: temporary, to: outputURL)
+            MediaExportArtifacts.removeSidecars(for: temporary)
             progress(.init(clipID: spec.clipID, fraction: 1))
             return outputURL
         } catch {
-            try? FileManager.default.removeItem(at: temporary)
+            MediaExportArtifacts.removeAll(for: temporary)
             if Task.isCancelled { throw CancellationError() }
             throw RenderError.encodingFailed
         }
@@ -186,7 +185,6 @@ private final class ExportSessionBox: @unchecked Sendable {
     init(_ session: AVAssetExportSession) { self.session = session }
     var fraction: Double { Double(session.progress) }
     func export(to url: URL) async throws { try await session.export(to: url, as: .mp4) }
-    func cancel() { session.cancelExport() }
 }
 
 private final class FrameProcessor: @unchecked Sendable {

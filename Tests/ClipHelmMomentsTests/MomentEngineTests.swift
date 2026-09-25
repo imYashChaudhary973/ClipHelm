@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import XCTest
 import ClipHelmCore
 import ClipHelmAnalysis
@@ -10,6 +11,7 @@ private actor ProposalGateway: OpenRouterGateway {
     var corrupt = false
     var addCommand = false
     var forceWeak = false
+    var cancelOnRequest = false
 
     func testConnection() async throws {}
     func fetchCatalog(_ filter: CatalogFilter) async throws -> Data { Data() }
@@ -17,6 +19,7 @@ private actor ProposalGateway: OpenRouterGateway {
 
     func completeClipProposal(prompt: String, modelID: String) async throws -> Data {
         prompts.append(prompt)
+        if cancelOnRequest { withUnsafeCurrentTask { $0?.cancel() } }
         let lines = prompt.split(separator: "\n")
         let id = UUID(uuidString: String(lines.first { $0.hasPrefix("id: ") }!.dropFirst(4)))!
         let assetID = AssetID(UUID(uuidString: String(lines.first { $0.hasPrefix("assetID: ") }!.dropFirst(9)))!)
@@ -47,6 +50,7 @@ private actor ProposalGateway: OpenRouterGateway {
     func setCorrupt(_ value: Bool) { corrupt = value }
     func setAddCommand(_ value: Bool) { addCommand = value }
     func setForceWeak(_ value: Bool) { forceWeak = value }
+    func setCancelOnRequest(_ value: Bool) { cancelOnRequest = value }
 }
 
 final class MomentEngineTests: XCTestCase {
@@ -56,10 +60,12 @@ final class MomentEngineTests: XCTestCase {
         let analysis: AnalysisResult
     }
 
-    private func fixture(_ kind: String, long: Bool = false) throws -> Fixture {
-        let duration = long ? 1_200 : 120
+    private func fixture(_ kind: String, long: Bool = false,
+                         durationOverride: Int? = nil, width: Int = 1920,
+                         height: Int = 1080, wordsPerBlock: Int = 20) throws -> Fixture {
+        let duration = durationOverride ?? (long ? 1_200 : 120)
         let asset = try MediaAsset(id: AssetID(), displayName: "\(kind).mov",
-            duration: MediaTime(microseconds: Int64(duration) * 1_000_000), width: 1920, height: 1080)
+            duration: MediaTime(microseconds: Int64(duration) * 1_000_000), width: width, height: height)
         let scenes = try stride(from: 0, to: duration, by: 30).map { start in
             Scene(assetID: asset.id, range: try MediaTimeRange(
                 start: MediaTime(microseconds: Int64(start) * 1_000_000),
@@ -67,11 +73,16 @@ final class MomentEngineTests: XCTestCase {
         }
         let all = try MediaTimeRange(start: MediaTime(microseconds: 0),
                                      end: MediaTime(microseconds: Int64(duration) * 1_000_000))
-        let visual = kind == "silentDemo" || kind == "screenRecording" || kind == "codingTutorial"
+        let visual = ["silentDemo", "screenRecording", "codingTutorial", "gameplay",
+                      "mixedSpeakerScreen"].contains(kind)
         let signals = try [LocalSignal(kind: visual ? .motion : .audioActivity, range: all,
                                        strength: 0.95, confidence: 0.95)]
         let content: ContentKind = switch kind {
         case "podcast", "interview": .conversation
+        case "talkingHead": .talkingHead
+        case "presentation": .presentation
+        case "gameplay": .gameplay
+        case "mixedSpeakerScreen": .screenShare
         case "codingTutorial", "screenRecording", "silentDemo": .demo
         default: .presentation
         }
@@ -85,6 +96,10 @@ final class MomentEngineTests: XCTestCase {
         case "codingTutorial": ["How this function handles an empty array.", "First we inspect the failing example.", "Then the code returns a safe default.", "The passing test shows the fix works."]
         case "lecture": ["Why the theorem follows from this definition.", "Consider the first useful example carefully.", "This derivation gives the central insight.", "The conclusion completes the proof."]
         case "screenRecording": ["How to set up the dashboard step by step.", "Click the filter and watch the result.", "The display now shows the selected rows.", "This completes the useful demo."]
+        case "talkingHead": ["Why this tip changed my workflow.", "Here is the mistake I made.", "The new approach fixed that issue.", "The result is easy to repeat."]
+        case "presentation": ["What this chart reveals about growth.", "The first number gives us context.", "The comparison shows the important change.", "That is the conclusion of this slide."]
+        case "gameplay": ["Why this strategy works in this encounter.", "The first move creates space.", "The next choice protects the objective.", "The round ends with a clear win."]
+        case "mixedSpeakerScreen": ["How this speaker uses the screen demo.", "First the code shows the failing case.", "Then the speaker explains the correction.", "The visible result completes the explanation."]
         case "mixed": ["contextneeded this depends on earlier missing details.", "contextneeded as I said before this is unclear.", "Why the solution follows from a concrete example.", "The completed example explains the useful result."]
         default: ["Why this explanation stands alone."]
         }
@@ -92,12 +107,13 @@ final class MomentEngineTests: XCTestCase {
         for block in 0..<(duration / 30) {
             let phrase = phrases[block % phrases.count].split(separator: " ").map(String.init)
             var words: [TranscriptWord] = []
-            for index in 0..<20 {
-                let second = block * 30 + index
+            for index in 0..<wordsPerBlock {
+                let start = Int64(block * 30) * 1_000_000 +
+                    (wordsPerBlock == 20 ? Int64(index) * 1_000_000 : Int64(index) * 400_000)
                 let text = phrase[index % phrase.count]
                 let range = try MediaTimeRange(
-                    start: MediaTime(microseconds: Int64(second) * 1_000_000),
-                    end: MediaTime(microseconds: Int64(second + 1) * 1_000_000))
+                    start: MediaTime(microseconds: start),
+                    end: MediaTime(microseconds: start + (wordsPerBlock == 20 ? 1_000_000 : 300_000)))
                 words.append(try TranscriptWord(text: text, range: range,
                     speakerID: kind == "interview" ? (block.isMultiple(of: 2) ? "A" : "B") : "A"))
             }
@@ -108,7 +124,8 @@ final class MomentEngineTests: XCTestCase {
     }
 
     func testSpeechFixturesUseBoundedSemanticWindowsAndReturnStrongMoments() async throws {
-        for kind in ["podcast", "interview", "codingTutorial", "lecture", "screenRecording"] {
+        for kind in ["podcast", "interview", "talkingHead", "codingTutorial", "screenRecording",
+                     "presentation", "lecture", "gameplay", "mixedSpeakerScreen"] {
             let input = try fixture(kind)
             let gateway = ProposalGateway()
             let result = try await MomentEngine(maximumSemanticWindows: 12).discover(
@@ -122,6 +139,38 @@ final class MomentEngineTests: XCTestCase {
             XCTAssertEqual(prompts.count, result.evaluatedCount)
             XCTAssertTrue(prompts.allSatisfy { $0.utf8.count < 4_000 })
             XCTAssertTrue(prompts.allSatisfy { $0.contains("transcript excerpt") })
+        }
+    }
+
+    func testLongTimelineBenchmark() async throws {
+        guard ProcessInfo.processInfo.environment["CLIPHELM_RUN_LONG_BENCHMARKS"] == "1" else {
+            throw XCTSkip("Run explicitly for the 30-minute to 4-hour synthetic timeline profile")
+        }
+        for minutes in [30, 60, 120, 240] {
+            for (width, height) in [(1920, 1080), (3840, 2160)] {
+                let input = try fixture("podcast", durationOverride: minutes * 60,
+                                        width: width, height: height, wordsPerBlock: 60)
+                let gateway = ProposalGateway()
+                var before = rusage()
+                var after = rusage()
+                getrusage(RUSAGE_SELF, &before)
+                let started = Date()
+                let result = try await MomentEngine(maximumSemanticWindows: 24).discover(
+                    asset: input.asset, transcript: input.transcript, analysis: input.analysis,
+                    selectedLengths: [.seconds30to60], requestedCount: 3,
+                    modelID: "fixture/model", gateway: gateway)
+                let elapsed = Date().timeIntervalSince(started)
+                getrusage(RUSAGE_SELF, &after)
+                let cpu = Double(after.ru_utime.tv_sec - before.ru_utime.tv_sec) +
+                    Double(after.ru_utime.tv_usec - before.ru_utime.tv_usec) / 1_000_000 +
+                    Double(after.ru_stime.tv_sec - before.ru_stime.tv_sec) +
+                    Double(after.ru_stime.tv_usec - before.ru_stime.tv_usec) / 1_000_000
+                print(String(format: "CLIPHELM_BENCHMARK minutes=%d size=%dx%d words=%d windows=%d wall=%.3f cpu=%.3f peak_rss_bytes=%lld",
+                    minutes, width, height, input.transcript!.words.count,
+                    result.evaluatedCount, elapsed, cpu, after.ru_maxrss))
+                XCTAssertFalse(result.moments.isEmpty)
+                XCTAssertLessThanOrEqual(result.evaluatedCount, 24)
+            }
         }
     }
 
@@ -140,6 +189,21 @@ final class MomentEngineTests: XCTestCase {
         XCTAssertTrue(prompts.allSatisfy { $0.contains("sampled first/middle/last") })
         XCTAssertTrue(result.moments.allSatisfy { $0.proposal.range.durationMicroseconds >= 300_000_000 })
         XCTAssertGreaterThan(input.transcript!.words.count, 500)
+    }
+
+    func testCancelledOpenRouterResponseCannotBecomeAClip() async throws {
+        let input = try fixture("podcast")
+        let gateway = ProposalGateway()
+        await gateway.setCancelOnRequest(true)
+        let job = Task {
+            try await MomentEngine().discover(asset: input.asset, transcript: input.transcript,
+                analysis: input.analysis, selectedLengths: [.seconds30to60],
+                requestedCount: 1, modelID: "fixture/model", gateway: gateway)
+        }
+        do {
+            _ = try await job.value
+            XCTFail("A cancelled model call must not yield a clip")
+        } catch is CancellationError { }
     }
 
     func testSilentDemoUsesLocalEvidenceWithoutAICall() async throws {

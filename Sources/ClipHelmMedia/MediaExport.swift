@@ -45,12 +45,31 @@ enum MediaExport {
             try Task.checkCancellation()
             try FileManager.default.setAttributes([.posixPermissions: 0o600],
                                                   ofItemAtPath: temporary.path)
+            MediaExportArtifacts.removeSidecars(for: temporary)
             progress(MediaProgress(stage: stage, fraction: 1))
             return temporary
         } catch {
-            try? FileManager.default.removeItem(at: temporary)
+            MediaExportArtifacts.removeAll(for: temporary)
             if Task.isCancelled { throw CancellationError() }
             throw MediaEngineError.processingFailed
+        }
+    }
+}
+
+/// AVFoundation can leave uniquely named .sb-* files after a canceled export.
+public enum MediaExportArtifacts {
+    public static func removeAll(for temporary: URL) {
+        try? FileManager.default.removeItem(at: temporary)
+        removeSidecars(for: temporary)
+    }
+
+    public static func removeSidecars(for temporary: URL) {
+        let directory = temporary.deletingLastPathComponent()
+        let prefix = temporary.lastPathComponent + ".sb-"
+        guard let siblings = try? FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: nil) else { return }
+        for sibling in siblings where sibling.lastPathComponent.hasPrefix(prefix) {
+            try? FileManager.default.removeItem(at: sibling)
         }
     }
 }
