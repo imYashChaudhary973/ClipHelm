@@ -556,8 +556,9 @@ struct WizardView: View {
                         .foregroundStyle(.green)
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: DS.Space.xxs) {
-                        Text("Ready to create project").font(.title3.weight(.semibold))
-                        Text("Save the project, then process clips from its workspace.")
+                        Text(draft.sourceKind == .local ? "Source ready" : "Download complete")
+                            .font(.title3.weight(.semibold))
+                        Text("Create the project to start transcription and clip generation.")
                             .foregroundStyle(.secondary)
                     }
                 }

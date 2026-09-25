@@ -88,7 +88,7 @@ public struct ClipRenderer: Sendable {
         let program = try CaptionProgram(spec: spec)
         let processor = FrameProcessor(spec: spec, timeline: timeline, program: program, size: size)
         let videoComposition = AVMutableVideoComposition(asset: composition) { request in
-            processor.process(request)
+            autoreleasepool { processor.process(request) }
         }
         videoComposition.renderSize = size
         videoComposition.frameDuration = CMTime(value: 1, timescale: 30)
@@ -216,7 +216,18 @@ private final class FrameProcessor: @unchecked Sendable {
                let overlay = captions.render(frame, canvasSize: size) {
                 output = CIImage(cgImage: overlay).composited(over: image)
             } else { output = image }
-            request.finish(with: output.cropped(to: canvas), context: nil)
+            // AVFoundation aborts if a filter returns nil; keep a full-canvas source fallback.
+            let cropped: CIImage? = output.cropped(to: canvas)
+            let frame: CIImage
+            if let cropped, !cropped.extent.isEmpty {
+                frame = cropped
+            } else {
+                frame = place(source, sourceRect: source.extent, target: canvas, fill: false)
+            }
+            let finished: CIImage? = frame.composited(over: CIImage(color: .black).cropped(to: canvas))
+                .cropped(to: canvas)
+            guard let finished, finished.extent.contains(canvas) else { throw RenderError.encodingFailed }
+            request.finish(with: finished, context: nil)
         } catch {
             request.finish(with: error)
         }

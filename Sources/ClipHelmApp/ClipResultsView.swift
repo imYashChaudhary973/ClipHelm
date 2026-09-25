@@ -454,7 +454,7 @@ struct ClipReviewView: View {
     }
 
     private var playerView: some View {
-        VideoPlayer(player: player)
+        NativeVideoPlayer(player: player)
             .background(DS.videoBackground)
             .clipShape(RoundedRectangle(cornerRadius: DS.Radius.large, style: .continuous))
     }

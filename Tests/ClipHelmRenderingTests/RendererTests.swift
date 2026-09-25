@@ -99,6 +99,41 @@ final class RendererTests: XCTestCase {
         XCTAssertEqual(formats.first.map(CMFormatDescriptionGetMediaSubType), kCMVideoCodecType_H264)
     }
 
+    func testOptInLongLandscapeToPortraitRender() async throws {
+        guard let path = ProcessInfo.processInfo.environment["CLIPHELM_QA_PORTRAIT_SOURCE"] else {
+            throw XCTSkip("Set CLIPHELM_QA_PORTRAIT_SOURCE to an authorized landscape MP4")
+        }
+        let source = URL(fileURLWithPath: path)
+        let asset = try await MediaProbe().probe(fileURL: source, displayName: "QA source").asset
+        XCTAssertGreaterThan(asset.duration.microseconds, 30_000_000)
+        let range = try MediaTimeRange(start: MediaTime(microseconds: 0),
+                                       end: MediaTime(microseconds: 30_000_000))
+        let cueRange = try MediaTimeRange(start: MediaTime(microseconds: 1_000_000),
+                                          end: MediaTime(microseconds: 29_000_000))
+        let track = try CaptionTrack(cues: [CaptionCue(sourceRange: cueRange, text: "RENDER CHECK")],
+                                     wordByWord: false, blurIn: false)
+        let crop = try CropPath(sourceRange: range, keyframes: [
+            CropKeyframe(sourceTime: range.start,
+                         rect: try NormalizedRect(x: 0.341796875, y: 0,
+                                                  width: 0.31640625, height: 1))
+        ])
+        let spec = try ClipHelmEditSpec(clipID: ClipID(), sourceAssetID: asset.id,
+            segments: [EditSegment(sourceRange: range)], outputFormat: .vertical,
+            framingMode: .smartAuto, pacingMode: .balanced,
+            soundMode: .mute, captionStyle: .pop, cropPaths: [crop], captionTrack: track)
+        let directory = FileManager.default.temporaryDirectory.appending(path: "ClipHelm-long-\(UUID().uuidString)")
+        defer {
+            if FileManager.default.fileExists(atPath: directory.path) {
+                try? FileManager.default.removeItem(at: directory)
+            }
+        }
+        let output = directory.appending(path: "clip.mp4")
+        _ = try await ClipRenderer().render(spec, sourceURL: source, asset: asset, outputURL: output)
+        let rendered = try await MediaProbe().probe(fileURL: output, displayName: "QA output").asset
+        XCTAssertEqual(rendered.width, 1080)
+        XCTAssertEqual(rendered.height, 1920)
+    }
+
     func testOptInRealFourKRenderProfile() async throws {
         guard let path = ProcessInfo.processInfo.environment["CLIPHELM_QA_RENDER_SOURCE"] else {
             throw XCTSkip("Set CLIPHELM_QA_RENDER_SOURCE to an authorized 4K MP4")

@@ -369,6 +369,7 @@ struct AppShell: View {
         do {
             let project = try store.save(draft: draft, mediaAsset: source?.asset)
             if let source { sessionSources[project.id] = source }
+            if source != nil { autoProcessProjects.insert(project.id) }
             draft = ProjectDraft()
             navigation.openProject(project.id.rawValue)
         } catch {

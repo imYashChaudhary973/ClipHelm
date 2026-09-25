@@ -12,6 +12,22 @@ import ClipHelmCaptions
 import ClipHelmProcessing
 import UniformTypeIdentifiers
 
+/// AppKit playback avoids the SwiftUI AVKit view initialization crash on macOS 27.
+struct NativeVideoPlayer: NSViewRepresentable {
+    let player: AVPlayer
+
+    func makeNSView(context: Context) -> AVPlayerView {
+        let view = AVPlayerView()
+        view.controlsStyle = .inline
+        view.player = player
+        return view
+    }
+
+    func updateNSView(_ view: AVPlayerView, context: Context) {
+        if view.player !== player { view.player = player }
+    }
+}
+
 @MainActor
 private final class WorkspacePlaybackController: ObservableObject {
     let engine = PlaybackEngine()
@@ -564,7 +580,7 @@ struct WorkspacePlaybackView: View {
         if let source {
             let stage = ZStack {
                 DS.videoBackground
-                VideoPlayer(player: controller.engine.player)
+                NativeVideoPlayer(player: controller.engine.player)
                 if let program = controller.captionProgram {
                     CaptionPreviewView(program: program, engine: controller.engine,
                                        asset: source.asset)
@@ -977,20 +993,32 @@ struct WorkspacePlaybackView: View {
     private var processingBanner: some View {
         let stages = ProcessingStage.allCases.filter { $0 != .complete }
         let current = controller.processingProgress?.stage ?? .preparing
-        let index = stages.firstIndex(of: current) ?? 0
+        let index = current == .complete ? stages.count : stages.firstIndex(of: current) ?? 0
+        let fraction = controller.processingProgress?.fraction ?? 0
         return VStack(alignment: .leading, spacing: DS.Space.sm) {
             HStack(spacing: DS.Space.sm) {
                 ProgressView().controlSize(.small)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Making clips").font(.headline)
-                    Text("Step \(index + 1) of \(stages.count) · \(current.rawValue)")
+                    Text("Phase \(min(index + 1, stages.count)) of \(stages.count) · \(current == .preparing ? "Preparing" : current.rawValue)")
                         .font(.callout).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button("Cancel") { controller.cancelProcessing() }
             }
-            ProgressView(value: (Double(index) + (controller.processingProgress?.fraction ?? 0)) / Double(stages.count))
-                .accessibilityLabel("Making clips")
+            Label(project.sourceKind == .local ? "Source ready" : "Download complete",
+                  systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+            ForEach(Array(stages.enumerated()), id: \.element) { position, stage in
+                Label(stage == .preparing ? "Preparing" : stage.rawValue,
+                      systemImage: position < index ? "checkmark.circle.fill" :
+                        position == index ? "circle.dotted.circle.fill" : "circle")
+                    .foregroundStyle(position < index ? Color.green :
+                        position == index ? Color.primary : Color.secondary)
+                    .accessibilityValue(position < index ? "Done" : position == index ? "In progress" : "Waiting")
+            }
+            TaskProgressRow(label: current == .preparing ? "Preparing…" : "\(current.rawValue)…",
+                            fraction: current == .preparing && fraction == 0 ? nil : fraction)
             if let detail = controller.processingProgress?.detail {
                 Text(detail).font(.callout).foregroundStyle(.secondary)
             }
