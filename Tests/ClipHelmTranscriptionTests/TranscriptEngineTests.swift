@@ -24,6 +24,28 @@ private actor RecordingBackend: TranscriptionBackend {
     }
 }
 
+/// Records how many chunks are in flight at once.
+private actor ConcurrencyProbe {
+    private(set) var active = 0
+    private(set) var peak = 0
+    func enter() { active += 1; peak = max(peak, active) }
+    func leave() { active -= 1 }
+}
+
+private struct ParallelBackend: TranscriptionBackend {
+    let maximumChunkSeconds = 1
+    let maximumConcurrentChunks = 3
+    let probe: ConcurrencyProbe
+
+    func transcribe(audioURL: URL) async throws -> [TranscriptWord] {
+        await probe.enter()
+        try await Task.sleep(for: .milliseconds(150))
+        await probe.leave()
+        return [try TranscriptWord(text: "Hi", range: MediaTimeRange(
+            start: MediaTime(microseconds: 100_000), end: MediaTime(microseconds: 300_000)))]
+    }
+}
+
 private struct CancellingBackend: TranscriptionBackend {
     let maximumChunkSeconds = 3
     func transcribe(audioURL: URL) async throws -> [TranscriptWord] {
@@ -120,16 +142,44 @@ final class TranscriptEngineTests: XCTestCase {
         XCTAssertEqual(transcript.words[0].confidence, 0.9)
     }
 
-    func testInvalidBackendTimingsAreRejected() async throws {
+    func testWordsPastTheirChunkAreDroppedInsteadOfFailingTheTranscript() async throws {
         let source = try fixture("tone3")
         let asset = try await MediaProbe().probe(fileURL: source, displayName: "Tone").asset
-        do {
-            _ = try await TranscriptEngine().transcribe(
-                sourceURL: source, asset: asset, backend: RecordingBackend(invalid: true))
-            XCTFail("Backend time outside its chunk must be rejected")
-        } catch let error as TranscriptEngineError {
-            XCTAssertEqual(error, .invalidWordTimings)
-        }
+        let transcript = try await TranscriptEngine().transcribe(
+            sourceURL: source, asset: asset, backend: RecordingBackend(invalid: true))
+        XCTAssertTrue(transcript.words.isEmpty)
+    }
+
+    func testChunksRunConcurrentlyUpToTheBackendLimitAndStayOrdered() async throws {
+        let source = try fixture("tone3")
+        let asset = try await MediaProbe().probe(fileURL: source, displayName: "Tone").asset
+        let probe = ConcurrencyProbe()
+        let transcript = try await TranscriptEngine().transcribe(
+            sourceURL: source, asset: asset, backend: ParallelBackend(probe: probe))
+        let peak = await probe.peak
+        XCTAssertGreaterThan(peak, 1)
+        XCTAssertLessThanOrEqual(peak, 3)
+        XCTAssertEqual(transcript.words.map { $0.range.start.microseconds }, [100_000, 1_100_000, 2_100_000])
+    }
+
+    func testOpenRouterWordParsingHandlesProviderQuirks() throws {
+        // Whisper pads words with a space; Parakeet and Qwen return zero-length words;
+        // Deepgram numbers speakers.
+        let response = Data(#"""
+        {"text":"Well, we have uh","words":[
+          {"word":" Well,","start":1.94,"end":2.46},
+          {"word":"we","start":2.46,"end":2.46,"speaker":0},
+          {"word":"have","start":2.46,"end":2.8,"speaker":1},
+          {"word":"  ","start":2.9,"end":3.0},
+          {"word":"uh","start":3.1,"end":3.1}]}
+        """#.utf8)
+        let words = try OpenRouterTranscriptionBackend.words(from: response)
+        XCTAssertEqual(words.map(\.text), ["Well,", "we", "have", "uh"])
+        XCTAssertEqual(words[1].speakerID, "Speaker 1")
+        XCTAssertEqual(words[2].speakerID, "Speaker 2")
+        XCTAssertTrue(zip(words, words.dropFirst()).allSatisfy { $0.range.end <= $1.range.start })
+        XCTAssertTrue(words.allSatisfy { $0.range.end > $0.range.start })
+        XCTAssertEqual(words[3].range.end.microseconds, 3_350_000)
     }
 
     func testCancellationAfterBackendReturnsDoesNotCommitTranscript() async throws {
@@ -167,9 +217,9 @@ final class TranscriptEngineTests: XCTestCase {
         await gateway.setTranscriptionResponse(Data(#"{"text":"Hello"}"#.utf8))
         do {
             _ = try await backend.transcribe(audioURL: audio)
-            XCTFail("Untimed text must not be used for click-to-seek")
-        } catch let error as TranscriptEngineError {
-            XCTAssertEqual(error, .invalidWordTimings)
+            XCTFail("Untimed text must not be used for captions")
+        } catch let error as OpenRouterGatewayError {
+            XCTAssertEqual(error, .unsupportedTranscription)
         }
         await gateway.setTranscriptionResponse(Data(#"{"text":"Hello","words":[]}"#.utf8))
         do {

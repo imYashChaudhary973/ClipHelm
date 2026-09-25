@@ -116,7 +116,31 @@ public actor OpenRouterModelRegistry {
     }
 
     public func recommendedModel(for task: OpenRouterTask) -> OpenRouterModel? {
-        Self.recommend(from: models(supporting: task.requiredCapabilities))
+        let candidates = models(supporting: task.requiredCapabilities)
+        return task == .transcription ? Self.recommendTranscription(from: candidates)
+            : Self.recommend(from: candidates)
+    }
+
+    /// Models verified to return word timestamps through OpenRouter, fastest and cheapest first.
+    /// `gpt-4o*-transcribe` is left out: it rejects word-level `verbose_json` responses.
+    static let wordTimedTranscriptionPrefixes = [
+        "deepgram/nova-3", "nvidia/parakeet", "openai/whisper-large-v3-turbo",
+        "qwen/qwen3-asr", "openai/whisper-large-v3", "openai/whisper-1",
+    ]
+
+    static func recommendTranscription(from models: [OpenRouterModel]) -> OpenRouterModel? {
+        for prefix in wordTimedTranscriptionPrefixes {
+            if let match = models.filter({ $0.id.hasPrefix(prefix) })
+                .max(by: { $0.created < $1.created }) { return match }
+        }
+        return nil
+    }
+
+    /// Transcription models known to return word timings; others cannot drive captions.
+    public func wordTimedTranscriptionModels() -> [OpenRouterModel] {
+        models(supporting: [.transcription]).filter { model in
+            Self.wordTimedTranscriptionPrefixes.contains { model.id.hasPrefix($0) }
+        }
     }
 
     static func recommend(from models: [OpenRouterModel]) -> OpenRouterModel? {
