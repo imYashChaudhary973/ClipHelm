@@ -214,7 +214,7 @@ struct AppShell: View {
                     .frame(width: 36)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(project.title).font(.headline)
-                    Text("\(project.sourceLabel) · Draft project")
+                    Text("\(project.sourceLabel) · \(project.clips.isEmpty ? "Draft project" : "\(project.clips.count) clips")")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
@@ -272,6 +272,10 @@ struct AppShell: View {
                 Label("Saved", systemImage: "checkmark.circle")
                     .foregroundStyle(.secondary)
             }
+            if !project.clips.isEmpty {
+                results(project)
+                Divider()
+            }
             WorkspacePlaybackView(project: project, source: sessionSources[project.id],
                 analysisCacheDirectory: try? store.analysisCacheDirectory(for: project.id),
                 exportsDirectory: try? store.exportsDirectory(for: project.id),
@@ -281,45 +285,27 @@ struct AppShell: View {
                 reattachSource: { try await reattachSource($0, to: project) },
                 reattachRemote: { try await reattachRemote($0, authorized: $1,
                     to: project, progress: $2) })
-            Divider()
-            HStack {
-                Text("Generated clips").font(.headline)
-                Spacer()
-                Text("\(project.clips.count)").foregroundStyle(.secondary)
-            }
             if project.clips.isEmpty {
-                Text("Processed clips will appear here.").foregroundStyle(.secondary)
-            } else if let directory = try? store.exportsDirectory(for: project.id) {
-                ForEach(project.clips) { clip in
-                    let previewURL = directory.appending(path: clip.previewFileName)
-                    let finalURL = directory.appending(path: clip.finalFileName)
-                    HStack {
-                        VStack(alignment: .leading) {
-                            Text(clip.proposal.title).fontWeight(.medium)
-                            Text(clip.proposal.rationale).font(.callout).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Button("Preview") {
-                            NSWorkspace.shared.open(previewURL)
-                        }
-                        .disabled(!FileManager.default.fileExists(atPath: previewURL.path))
-                        Button("Reveal MP4") {
-                            NSWorkspace.shared.activateFileViewerSelecting([finalURL])
-                        }
-                        .disabled(!FileManager.default.fileExists(atPath: finalURL.path))
-                    }
-                    Divider()
-                }
+                Divider()
+                results(project)
             }
         }
         .padding(24)
         }
     }
 
+    private func results(_ project: ProjectRecord) -> some View {
+        ClipResultsView(project: project, source: sessionSources[project.id],
+            exportsDirectory: try? store.exportsDirectory(for: project.id),
+            cacheDirectory: try? store.analysisCacheDirectory(for: project.id),
+            saveClip: { try store.updateClip($0, for: project.id) },
+            deleteClip: { try store.deleteClip($0, from: project.id) })
+    }
+
     private func inspector(_ project: ProjectRecord) -> some View {
         Form {
             Section("Project") {
-                LabeledContent("Status", value: "Draft")
+                LabeledContent("Status", value: project.clips.isEmpty ? "Draft" : "\(project.clips.count) clips ready")
                 LabeledContent("Source", value: project.sourceLabel)
                 LabeledContent("Type", value: project.sourceKind.rawValue)
                 if let asset = project.mediaAsset {

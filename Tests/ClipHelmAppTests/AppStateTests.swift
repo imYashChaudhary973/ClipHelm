@@ -82,7 +82,52 @@ final class AppStateTests: XCTestCase {
         let restored = try XCTUnwrap(ProjectStore(rootURL: root).projects.first)
         XCTAssertEqual(restored.clips.count, 1)
         XCTAssertEqual(restored.clips[0].spec, spec)
+        XCTAssertEqual(restored.clips[0].title, "Good moment")
         XCTAssertFalse(restored.configuration.captionStyle != nil)
+
+        var renamed = restored.clips[0]
+        renamed.title = "Better title"
+        try store.updateClip(renamed, for: project.id)
+        XCTAssertEqual(ProjectStore(rootURL: root).projects[0].clips[0].title, "Better title")
+
+        let newPreview = directory.appending(path: "new-preview.mp4")
+        let newFinal = directory.appending(path: "new-final.mp4")
+        try Data([1]).write(to: newPreview)
+        try Data([2]).write(to: newFinal)
+        renamed.previewFileName = newPreview.lastPathComponent
+        renamed.finalFileName = newFinal.lastPathComponent
+        try store.updateClip(renamed, for: project.id)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: preview.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: final.path))
+        XCTAssertEqual(ProjectStore(rootURL: root).projects[0].clips[0].finalFileName, "new-final.mp4")
+
+        try store.deleteClip(spec.clipID, from: project.id)
+        XCTAssertTrue(ProjectStore(rootURL: root).projects[0].clips.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: newPreview.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: newFinal.path))
+    }
+
+    func testVersionThreeClipTitleMigratesFromProposal() throws {
+        let range = try MediaTimeRange(start: MediaTime(microseconds: 0),
+                                       end: MediaTime(microseconds: 1_000_000))
+        let asset = try MediaAsset(id: AssetID(), displayName: "source.mp4",
+                                   duration: range.end, width: 1920, height: 1080)
+        let proposal = try ClipProposal(assetID: asset.id, range: range,
+            title: "Original title", rationale: "Test", confidence: 0.8)
+        let spec = try ClipHelmEditSpec(clipID: ClipID(), sourceAssetID: asset.id,
+            segments: [EditSegment(sourceRange: range)], outputFormat: .horizontal,
+            framingMode: .classicFullFrame, pacingMode: .balanced,
+            soundMode: .mute, captionStyle: nil)
+        let clip = ProjectClipRecord(ProcessedClip(proposal: proposal, spec: spec,
+            previewURL: URL(fileURLWithPath: "/tmp/preview.mp4"),
+            finalURL: URL(fileURLWithPath: "/tmp/final.mp4")))
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(clip)) as? [String: Any])
+        json.removeValue(forKey: "title")
+        json.removeValue(forKey: "trimRange")
+        let migrated = try JSONDecoder().decode(ProjectClipRecord.self,
+            from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertEqual(migrated.title, proposal.title)
+        try migrated.validate(for: asset)
     }
 
     func testEveryGuidedChoicePersistsAsConfiguration() throws {
@@ -224,6 +269,30 @@ final class AppStateTests: XCTestCase {
             range: MediaTimeRange(start: MediaTime(microseconds: 100_000),
                                   end: MediaTime(microseconds: 300_000)))
         try store.saveTranscript(try Transcript(assetID: asset.id, words: [word]), for: project.id)
+        let range = try MediaTimeRange(start: MediaTime(microseconds: 0), end: asset.duration)
+        let proposal = try ClipProposal(assetID: asset.id, range: range,
+            title: "A useful moment", rationale: "Layout test", confidence: 0.8)
+        let spec = try ClipHelmEditSpec(clipID: ClipID(), sourceAssetID: asset.id,
+            segments: [EditSegment(sourceRange: range)], outputFormat: .vertical,
+            framingMode: .classicFullFrame, pacingMode: .balanced,
+            soundMode: .mute, captionStyle: nil)
+        let directory = try store.exportsDirectory(for: project.id)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let fixture = try XCTUnwrap(Bundle.module.url(forResource: "valid", withExtension: "mp4"))
+        let preview = directory.appending(path: "layout-preview.mp4")
+        let final = directory.appending(path: "layout.mp4")
+        try FileManager.default.copyItem(at: fixture, to: preview)
+        try FileManager.default.copyItem(at: fixture, to: final)
+        let source = PreparedSource(descriptor: try SourceDescriptor(localFile: fixture),
+            fileURL: fixture, asset: asset, hasAudio: false)
+        let analysis = try AnalysisResult(asset: asset,
+            scenes: [Scene(assetID: asset.id, range: range)], signals: [],
+            detections: [], subjectTracks: [],
+            classifications: [ContentClassification(range: range, kind: .unknown, confidence: 0.1)])
+        try store.saveProcessingResult(ProcessingResult(source: source,
+            transcript: try Transcript(assetID: asset.id, words: [word]), analysis: analysis,
+            clips: [ProcessedClip(proposal: proposal, spec: spec,
+                                  previewURL: preview, finalURL: final)], explanation: nil), for: project.id)
         navigation.openProject(project.id.rawValue)
         for size in [NSSize(width: 780, height: 560), NSSize(width: 1440, height: 900)] {
             hosting.frame = NSRect(origin: .zero, size: size)
