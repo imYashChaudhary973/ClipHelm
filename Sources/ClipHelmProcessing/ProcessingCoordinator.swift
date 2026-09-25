@@ -174,17 +174,21 @@ public struct ProcessingCoordinator: Sendable {
         }
         var screenHints = localScreens
         if configuration.smartEdit.useVisionForTrickyShots {
-            let layoutHints = try await LayoutVisionAdvisor().classify(sourceURL: source.fileURL,
-                asset: source.asset, configuration: configuration, range: full,
-                analysis: analysis, localHints: localScreens, registry: registry, gateway: gateway)
+            let layoutHints = try await Self.optionalHints {
+                try await LayoutVisionAdvisor().classify(sourceURL: source.fileURL,
+                    asset: source.asset, configuration: configuration, range: full,
+                    analysis: analysis, localHints: localScreens, registry: registry, gateway: gateway)
+            }
             screenHints.append(contentsOf: layoutHints)
         }
         var frameHints: [[ContentClassification]] = []
         for (index, moment) in discovery.moments.enumerated() {
             try Task.checkCancellation()
-            let hints = try await FramingVisionAdvisor().classify(sourceURL: source.fileURL,
-                asset: source.asset, configuration: configuration, range: moment.proposal.range,
-                analysis: analysis, registry: registry, gateway: gateway)
+            let hints = try await Self.optionalHints {
+                try await FramingVisionAdvisor().classify(sourceURL: source.fileURL,
+                    asset: source.asset, configuration: configuration, range: moment.proposal.range,
+                    analysis: analysis, registry: registry, gateway: gateway)
+            }
             progress(.init(stage: .checkingShots,
                 fraction: 0.5 + Double(index + 1) / Double(discovery.moments.count) * 0.5))
             frameHints.append(hints)
@@ -240,6 +244,16 @@ public struct ProcessingCoordinator: Sendable {
                 try? FileManager.default.removeItem(at: clip.finalURL)
             }
             throw error
+        }
+    }
+
+    /// Vision hints refine local framing; a failed or unsupported vision request keeps the local result.
+    private static func optionalHints<T>(_ body: () async throws -> [T]) async throws -> [T] {
+        do { return try await body() }
+        catch is CancellationError { throw CancellationError() }
+        catch {
+            try Task.checkCancellation()
+            return []
         }
     }
 }

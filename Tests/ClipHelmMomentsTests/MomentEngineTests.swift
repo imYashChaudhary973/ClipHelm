@@ -53,7 +53,122 @@ private actor ProposalGateway: OpenRouterGateway {
     func setCancelOnRequest(_ value: Bool) { cancelOnRequest = value }
 }
 
+/// Returns the short rating form, failing chosen requests to exercise partial-failure handling.
+private actor RatingGateway: OpenRouterGateway {
+    var calls = 0
+    var failure: OpenRouterGatewayError?
+    var failEvery = 0
+    var level: Double
+
+    init(failure: OpenRouterGatewayError? = nil, failEvery: Int = 0, level: Double = 0.9) {
+        self.failure = failure
+        self.failEvery = failEvery
+        self.level = level
+    }
+
+    func testConnection() async throws {}
+    func fetchCatalog(_ filter: CatalogFilter) async throws -> Data { Data() }
+    func transcribeAudio(_ audio: Data, modelID: String) async throws -> Data { Data() }
+
+    func completeClipProposal(prompt: String, modelID: String) async throws -> Data {
+        calls += 1
+        if let failure, failEvery == 0 || calls.isMultiple(of: failEvery) { throw failure }
+        var scores = Dictionary(uniqueKeysWithValues: ["hook", "standaloneCompleteness", "insight", "story",
+            "questionAnswerCompletion", "educationalValue", "interest"].map { ($0, level) })
+        scores["contextDependency"] = 0.05
+        scores["repetition"] = 0.05
+        return try JSONSerialization.data(withJSONObject: [
+            "title": "A strong moment", "rationale": "Complete and useful.",
+            "confidence": level, "score": scores,
+        ])
+    }
+}
+
 final class MomentEngineTests: XCTestCase {
+    func testShortRatingFormUsesLocalIdentityAndRange() async throws {
+        let input = try fixture("lecture")
+        let result = try await MomentEngine(maximumSemanticWindows: 8).discover(
+            asset: input.asset, transcript: input.transcript, analysis: input.analysis,
+            selectedLengths: [.seconds30to60], requestedCount: 3,
+            modelID: "fixture/model", gateway: RatingGateway())
+        XCTAssertFalse(result.moments.isEmpty)
+        XCTAssertEqual(result.rejectedCount, 0)
+        XCTAssertTrue(result.moments.allSatisfy {
+            $0.proposal.id == $0.candidate.id && $0.proposal.range == $0.candidate.range &&
+                $0.proposal.assetID == input.asset.id && $0.proposal.title == "A strong moment"
+        })
+    }
+
+    func testWordsStraddlingSceneCutsDoNotInvalidateCandidates() async throws {
+        let input = try fixture("lecture")
+        // A window from 40 s to the 60 s scene cut ends inside the first word of the
+        // next speaker's segment, which starts at 59.5 s.
+        let layout: [(start: Int64, speaker: String)] = [(10_000_000, "A"), (40_000_000, "B"), (59_500_000, "A")]
+        let segments = try layout.map { item -> TranscriptSegment in
+            let words = try (0..<15).map { index -> TranscriptWord in
+                let start = item.start + Int64(index) * 1_000_000
+                return try TranscriptWord(text: index == 14 ? "done." : "word",
+                    range: MediaTimeRange(start: MediaTime(microseconds: start),
+                                          end: MediaTime(microseconds: start + 1_000_000)),
+                    speakerID: item.speaker)
+            }
+            return try TranscriptSegment(words: words)
+        }
+        let transcript = try Transcript(assetID: input.asset.id, segments: segments)
+        let result = try await MomentEngine(maximumSemanticWindows: 12).discover(
+            asset: input.asset, transcript: transcript, analysis: input.analysis,
+            selectedLengths: [.seconds10to30], requestedCount: nil,
+            modelID: "fixture/model", gateway: RatingGateway())
+        XCTAssertGreaterThan(result.evaluatedCount, 0)
+        XCTAssertTrue(result.moments.allSatisfy { moment in
+            moment.candidate.signals.allSatisfy { moment.candidate.range.start <= $0.range.start &&
+                $0.range.end <= moment.candidate.range.end }
+        })
+    }
+
+    func testMiddlingScoresFallBackToLabeledBestAvailablePicks() async throws {
+        let input = try fixture("lecture")
+        let result = try await MomentEngine(maximumSemanticWindows: 8).discover(
+            asset: input.asset, transcript: input.transcript, analysis: input.analysis,
+            selectedLengths: [.seconds30to60], requestedCount: nil,
+            modelID: "fixture/model", gateway: RatingGateway(level: 0.3))
+        XCTAssertFalse(result.moments.isEmpty)
+        XCTAssertLessThanOrEqual(result.moments.count, 3)
+        XCTAssertTrue((result.explanation ?? "").contains("best available"))
+    }
+
+    func testSomeFailedRequestsStillProduceMoments() async throws {
+        let input = try fixture("podcast")
+        let gateway = RatingGateway(failure: .invalidResponse, failEvery: 3)
+        let result = try await MomentEngine(maximumSemanticWindows: 9).discover(
+            asset: input.asset, transcript: input.transcript, analysis: input.analysis,
+            selectedLengths: [.seconds30to60], requestedCount: nil,
+            modelID: "fixture/model", gateway: gateway)
+        XCTAssertFalse(result.moments.isEmpty)
+        XCTAssertGreaterThan(result.rejectedCount, 0)
+    }
+
+    func testEveryRequestFailingReportsTheCauseAndKeyErrorsStopImmediately() async throws {
+        let input = try fixture("podcast")
+        for (failure, expectedCalls) in [(OpenRouterGatewayError.modelUnsupported, nil as Int?),
+                                          (.invalidKey, MomentEngine.concurrentRequests)] {
+            let gateway = RatingGateway(failure: failure)
+            do {
+                _ = try await MomentEngine(maximumSemanticWindows: 12).discover(
+                    asset: input.asset, transcript: input.transcript, analysis: input.analysis,
+                    selectedLengths: [.seconds30to60], requestedCount: nil,
+                    modelID: "fixture/model", gateway: gateway)
+                XCTFail("Expected \(failure)")
+            } catch let error as OpenRouterGatewayError {
+                XCTAssertEqual(error, failure)
+            }
+            if let expectedCalls {
+                let calls = await gateway.calls
+                XCTAssertLessThanOrEqual(calls, expectedCalls)
+            }
+        }
+    }
+
     private struct Fixture {
         let asset: MediaAsset
         let transcript: Transcript?
