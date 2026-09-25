@@ -4,7 +4,7 @@ ClipHelm is a local-first native macOS editor. Its own pipeline owns media, time
 
 ## Module boundaries
 
-Dependencies point downward. `ClipHelmCore`, `ClipHelmSecurity`, `ClipHelmOpenRouter`, `ClipHelmMedia`, `ClipHelmSources`, `ClipHelmTranscription`, `ClipHelmAnalysis`, `ClipHelmMoments`, and the `ClipHelmApp` shell are implemented targets. The remaining modules are design boundaries for later phases.
+Dependencies point downward. `ClipHelmCore`, `ClipHelmSecurity`, `ClipHelmOpenRouter`, `ClipHelmMedia`, `ClipHelmSources`, `ClipHelmTranscription`, `ClipHelmAnalysis`, `ClipHelmMoments`, `ClipHelmEditing`, and the `ClipHelmApp` shell are implemented targets. The remaining modules are design boundaries for later phases.
 
 | Module | Owns | May depend on |
 | --- | --- | --- |
@@ -17,12 +17,12 @@ Dependencies point downward. `ClipHelmCore`, `ClipHelmSecurity`, `ClipHelmOpenRo
 | Transcription | Chunked speech-to-word timeline, backend selection and normalization | Core, Media, OpenRouter |
 | Analysis | Local scene, subject, audio activity and pause evidence | Core, Media |
 | Moments | Hierarchical local candidates, bounded semantic scoring, ranking and deduplication | Core, Analysis, OpenRouter |
-| Clipping | `ClipPlanner`: validates proposals/intents and selects source intervals | Core, Moments |
+| Clipping | `ClipPlanner`: validates proposals/intents and selects source intervals | Core, Analysis |
 | Framing | Tracking and crop trajectories for each shot | Core, Analysis |
 | Layouts | Canvas placement for full-frame and blurred compositions | Core, Framing |
 | Pacing | Dead-air, pause and filler cut proposals | Core, Transcription, Analysis |
 | Captions | Word segmentation and style timing | Core, Transcription |
-| Editing | Non-destructive timeline; builds `ClipHelmEditSpec` from validated decisions | Core, Clipping, Framing, Layouts, Pacing, Captions |
+| Editing | Implemented `ClipHelmEditing`: deterministic planning, source/edited timeline mapping, spec validation, typed operations, and in-memory undo/redo | Core, Analysis |
 | Rendering | Preview/export compiler, AVFoundation/VideoToolbox; optional FFmpeg adapter | Core, Media, Editing |
 | SharedUI | Reusable SwiftUI controls and presentation | Core, SwiftUI |
 
@@ -41,6 +41,8 @@ Phase 6 `AnalysisEngine` runs only after the user starts local analysis in the w
 Phase 7 `MomentEngine` partitions transcript and analysis evidence into source-time boundaries, builds duration-aware candidates locally, and sends only bounded candidate excerpts to a user-selected structured-output OpenRouter model. A `ClipProposal` must echo the exact local candidate ID, asset, and range; malformed or extra renderer fields are rejected. Ranking, quality thresholds, repeated-idea removal, duration checks, and count limits remain local. Silent demos use local visual evidence and are labeled for manual review. The workspace runs discovery on request, shows progress, supports cancellation, and can seek to results. No cuts or render specs are made in this phase.
 
 Phase 8 extends the guided project setup with destination, framing, smart editing, pacing, multiple lengths, count target, sound, and caption effects. The SwiftUI draft converts to one validated `ClipConfiguration` at save time. The project manifest stores that core value; the clipping engine has no dependency on SwiftUI or draft state. A source without an audio track starts with captions off, and an empty transcript clears caption choices. Sound normalization and editing toggles are stored preferences for later processing phases, not active processing in setup.
+
+Phase 9 adds `ClipHelmEditing` with no provider dependency. `ClipPlanner` combines a typed proposal and configuration with validated local analysis, then emits schema-versioned `ClipHelmEditSpec`. Source-time trim/remove segments, crop paths, layout, audio operation, and caption cues are validated before use. `EditTimeline` maps retained source intervals to edited time. `EditHistory` provides typed edits with in-memory undo/redo. The app does not render or persist edit history in this phase.
 
 ## Data flow
 
@@ -64,4 +66,4 @@ Clip discovery may ask OpenRouter for meaning and ranking, but local evidence su
 - V1 UI offers 9:16 and 16:9. `OutputFormat` stores dimensions so 1:1, 4:5, and custom canvases can be added without changing the time model.
 - Captions are based on word timings and may animate per word or blur in. When no meaningful speech exists, the planner leaves captions disabled by default.
 
-Clip discovery, clipping, framing, captions rendering and final export remain later phases.
+Final crop smoothing, filler cleanup, clip rendering, and final export remain later phases.

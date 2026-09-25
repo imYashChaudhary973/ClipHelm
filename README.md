@@ -1,6 +1,6 @@
 # ClipHelm
 
-Native macOS clip editor in development. Phase 8 adds the full guided setup and saves its choices as a validated clip configuration. Clip editing, rendering, and final export are still planned.
+Native macOS clip editor in development. Phase 9 adds a deterministic, non-destructive edit-spec engine behind the guided setup. Rendering and final export are still planned.
 
 ## Run
 
@@ -27,10 +27,12 @@ In a workspace, choose **Transcribe on This Mac** to use Apple's on-device speec
 
 To discover moments, run **Analyze on This Mac** in the workspace. With speech, transcribe, load structured text models, select one, then choose **Find Best Moments**. The explicit discovery action uses OpenRouter credits and sends only bounded excerpts from local candidate windows. It ranks, deduplicates, checks selected lengths, and shows a reason when no strong moments remain. Click a result to seek. Without a transcript, it can suggest active visual intervals locally for manual review; no AI call is made. Discovery results are session-only in this phase.
 
+The `ClipHelmEditing` library can turn validated proposals, project choices, and local analysis into an edit spec. It supports source/edited time mapping, retained-range trims and removals, static or animated crop decisions, layouts, audio modes, caption cues, and in-memory undo/redo. The app does not yet expose these edit operations or render their output; see [docs/EDIT_SPEC.md](docs/EDIT_SPEC.md).
+
 ## Tests
 
 ```bash
 swift test --disable-sandbox
 ```
 
-The tests cover source validation, 1080p/4K and 25/30/60 fps metadata, proxies, frame sampling, audio extraction, time mapping, transcript chunk mapping and silence detection, local analysis, moment discovery fixtures, project restoration, mocked OpenRouter behavior, and Keychain input validation. The live Keychain CRUD test needs access to macOS Keychain. Module contracts are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+The tests cover source validation, 1080p/4K and 25/30/60 fps metadata, proxies, frame sampling, audio extraction, time mapping, transcript chunk mapping and silence detection, local analysis, moment discovery fixtures, edit planning and validation, undo/redo, project restoration, mocked OpenRouter behavior, and Keychain input validation. The live Keychain CRUD test needs access to macOS Keychain. Module contracts are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).

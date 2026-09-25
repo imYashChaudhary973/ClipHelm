@@ -141,7 +141,7 @@ public struct EditSegment: Codable, Equatable, Sendable {
 }
 
 public struct ClipHelmEditSpec: Codable, Equatable, Sendable {
-    public static let currentVersion = 1
+    public static let currentVersion = 2
 
     public let schemaVersion: Int
     public let clipID: ClipID
@@ -150,15 +150,35 @@ public struct ClipHelmEditSpec: Codable, Equatable, Sendable {
     public let outputFormat: OutputFormat
     public let framingMode: FramingMode
     public let pacingMode: PacingMode
-    public let soundMode: SoundMode
+    public let layout: LayoutMode
+    public let cropPaths: [CropPath]
+    public let audioOperation: AudioOperation
     public let captionStyle: CaptionStyle?
+    public let captionTrack: CaptionTrack?
+
+    public var soundMode: SoundMode { audioOperation.soundMode }
 
     public init(schemaVersion: Int = Self.currentVersion, clipID: ClipID,
                 sourceAssetID: AssetID, segments: [EditSegment], outputFormat: OutputFormat,
                 framingMode: FramingMode, pacingMode: PacingMode, soundMode: SoundMode,
-                captionStyle: CaptionStyle?) throws {
-        guard schemaVersion == Self.currentVersion, !segments.isEmpty,
-              zip(segments, segments.dropFirst()).allSatisfy({ $0.sourceRange.end <= $1.sourceRange.start }) else {
+                captionStyle: CaptionStyle?, layout: LayoutMode? = nil,
+                cropPaths: [CropPath] = [], captionTrack: CaptionTrack? = nil) throws {
+        let resolvedLayout = layout ?? LayoutMode(framing: framingMode)
+        guard schemaVersion == Self.currentVersion, (1...10_000).contains(segments.count),
+              zip(segments, segments.dropFirst()).allSatisfy({ $0.sourceRange.end <= $1.sourceRange.start }),
+              cropPaths.count <= segments.count,
+              resolvedLayout.accepts(framingMode),
+              (resolvedLayout == .fill || cropPaths.isEmpty),
+              (captionStyle != nil || captionTrack == nil),
+              cropPaths.allSatisfy({ path in
+                  segments.contains { $0.sourceRange.start <= path.sourceRange.start &&
+                      path.sourceRange.end <= $0.sourceRange.end }
+              }),
+              zip(cropPaths, cropPaths.dropFirst()).allSatisfy({ $0.sourceRange.end <= $1.sourceRange.start }),
+              captionTrack?.cues.allSatisfy({ cue in
+                  segments.contains { $0.sourceRange.start <= cue.sourceRange.start &&
+                      cue.sourceRange.end <= $0.sourceRange.end }
+              }) ?? true else {
             throw ModelError.invalid("ClipHelmEditSpec")
         }
         self.schemaVersion = schemaVersion
@@ -168,13 +188,18 @@ public struct ClipHelmEditSpec: Codable, Equatable, Sendable {
         self.outputFormat = outputFormat
         self.framingMode = framingMode
         self.pacingMode = pacingMode
-        self.soundMode = soundMode
+        self.layout = resolvedLayout
+        self.cropPaths = cropPaths
+        audioOperation = AudioOperation(soundMode: soundMode)
         self.captionStyle = captionStyle
+        self.captionTrack = captionTrack
     }
 
     public func validate(for asset: MediaAsset) throws {
         guard sourceAssetID == asset.id,
-              segments.allSatisfy({ $0.sourceRange.end <= asset.duration }) else {
+              segments.allSatisfy({ $0.sourceRange.end <= asset.duration }),
+              cropPaths.allSatisfy({ $0.sourceRange.end <= asset.duration }),
+              captionTrack?.cues.allSatisfy({ $0.sourceRange.end <= asset.duration }) ?? true else {
             throw ModelError.invalid("ClipHelmEditSpec source bounds")
         }
     }
@@ -182,18 +207,45 @@ public struct ClipHelmEditSpec: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case schemaVersion, clipID, sourceAssetID, segments, outputFormat
         case framingMode, pacingMode, soundMode, captionStyle
+        case layout, cropPaths, audioOperation, captionTrack
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        try self.init(schemaVersion: c.decode(Int.self, forKey: .schemaVersion),
+        let version = try c.decode(Int.self, forKey: .schemaVersion)
+        guard version == 1 || version == Self.currentVersion else {
+            throw ModelError.invalid("ClipHelmEditSpec version")
+        }
+        let soundMode = version == 1
+            ? try c.decode(SoundMode.self, forKey: .soundMode)
+            : try c.decode(AudioOperation.self, forKey: .audioOperation).soundMode
+        try self.init(schemaVersion: Self.currentVersion,
                       clipID: c.decode(ClipID.self, forKey: .clipID),
                       sourceAssetID: c.decode(AssetID.self, forKey: .sourceAssetID),
                       segments: c.decode([EditSegment].self, forKey: .segments),
                       outputFormat: c.decode(OutputFormat.self, forKey: .outputFormat),
                       framingMode: c.decode(FramingMode.self, forKey: .framingMode),
                       pacingMode: c.decode(PacingMode.self, forKey: .pacingMode),
-                      soundMode: c.decode(SoundMode.self, forKey: .soundMode),
-                      captionStyle: c.decodeIfPresent(CaptionStyle.self, forKey: .captionStyle))
+                      soundMode: soundMode,
+                      captionStyle: c.decodeIfPresent(CaptionStyle.self, forKey: .captionStyle),
+                      layout: version == 1 ? nil : c.decode(LayoutMode.self, forKey: .layout),
+                      cropPaths: version == 1 ? [] : c.decode([CropPath].self, forKey: .cropPaths),
+                      captionTrack: version == 1 ? nil : c.decodeIfPresent(CaptionTrack.self, forKey: .captionTrack))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(schemaVersion, forKey: .schemaVersion)
+        try c.encode(clipID, forKey: .clipID)
+        try c.encode(sourceAssetID, forKey: .sourceAssetID)
+        try c.encode(segments, forKey: .segments)
+        try c.encode(outputFormat, forKey: .outputFormat)
+        try c.encode(framingMode, forKey: .framingMode)
+        try c.encode(pacingMode, forKey: .pacingMode)
+        try c.encode(layout, forKey: .layout)
+        try c.encode(cropPaths, forKey: .cropPaths)
+        try c.encode(audioOperation, forKey: .audioOperation)
+        try c.encodeIfPresent(captionStyle, forKey: .captionStyle)
+        try c.encodeIfPresent(captionTrack, forKey: .captionTrack)
     }
 }
