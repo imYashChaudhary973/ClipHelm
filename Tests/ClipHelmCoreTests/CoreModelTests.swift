@@ -117,7 +117,7 @@ final class CoreModelTests: XCTestCase {
                                        outputFormat: .horizontal, framingMode: .classicFullFrame,
                                        pacingMode: .natural, soundMode: .source, captionStyle: nil)
         var specJSON = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(spec)) as? [String: Any])
-        specJSON["schemaVersion"] = 3
+        specJSON["schemaVersion"] = 4
         XCTAssertThrowsError(try JSONDecoder().decode(ClipHelmEditSpec.self,
                                                        from: JSONSerialization.data(withJSONObject: specJSON)))
     }

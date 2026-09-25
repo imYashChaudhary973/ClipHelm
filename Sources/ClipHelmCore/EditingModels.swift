@@ -141,7 +141,7 @@ public struct EditSegment: Codable, Equatable, Sendable {
 }
 
 public struct ClipHelmEditSpec: Codable, Equatable, Sendable {
-    public static let currentVersion = 2
+    public static let currentVersion = 3
 
     public let schemaVersion: Int
     public let clipID: ClipID
@@ -151,6 +151,7 @@ public struct ClipHelmEditSpec: Codable, Equatable, Sendable {
     public let framingMode: FramingMode
     public let pacingMode: PacingMode
     public let layout: LayoutMode
+    public let layoutCues: [LayoutCue]
     public let cropPaths: [CropPath]
     public let audioOperation: AudioOperation
     public let captionStyle: CaptionStyle?
@@ -162,19 +163,27 @@ public struct ClipHelmEditSpec: Codable, Equatable, Sendable {
                 sourceAssetID: AssetID, segments: [EditSegment], outputFormat: OutputFormat,
                 framingMode: FramingMode, pacingMode: PacingMode, soundMode: SoundMode,
                 captionStyle: CaptionStyle?, layout: LayoutMode? = nil,
-                cropPaths: [CropPath] = [], captionTrack: CaptionTrack? = nil) throws {
+                cropPaths: [CropPath] = [], captionTrack: CaptionTrack? = nil,
+                layoutCues: [LayoutCue] = []) throws {
         let resolvedLayout = layout ?? LayoutMode(framing: framingMode)
         guard schemaVersion == Self.currentVersion, (1...10_000).contains(segments.count),
               zip(segments, segments.dropFirst()).allSatisfy({ $0.sourceRange.end <= $1.sourceRange.start }),
               cropPaths.count <= 10_000,
+              layoutCues.count <= 10_000,
               resolvedLayout.accepts(framingMode),
               (resolvedLayout == .fill || cropPaths.isEmpty),
+              (resolvedLayout == .fill || layoutCues.allSatisfy({ $0.layout == .original })),
               (captionStyle != nil || captionTrack == nil),
               cropPaths.allSatisfy({ path in
                   segments.contains { $0.sourceRange.start <= path.sourceRange.start &&
                       path.sourceRange.end <= $0.sourceRange.end }
               }),
               zip(cropPaths, cropPaths.dropFirst()).allSatisfy({ $0.sourceRange.end <= $1.sourceRange.start }),
+              layoutCues.allSatisfy({ cue in
+                  segments.contains { $0.sourceRange.start <= cue.sourceRange.start &&
+                      cue.sourceRange.end <= $0.sourceRange.end }
+              }),
+              zip(layoutCues, layoutCues.dropFirst()).allSatisfy({ $0.sourceRange.end <= $1.sourceRange.start }),
               captionTrack?.cues.allSatisfy({ cue in
                   segments.contains { $0.sourceRange.start <= cue.sourceRange.start &&
                       cue.sourceRange.end <= $0.sourceRange.end }
@@ -189,6 +198,7 @@ public struct ClipHelmEditSpec: Codable, Equatable, Sendable {
         self.framingMode = framingMode
         self.pacingMode = pacingMode
         self.layout = resolvedLayout
+        self.layoutCues = layoutCues
         self.cropPaths = cropPaths
         audioOperation = AudioOperation(soundMode: soundMode)
         self.captionStyle = captionStyle
@@ -199,6 +209,7 @@ public struct ClipHelmEditSpec: Codable, Equatable, Sendable {
         guard sourceAssetID == asset.id,
               segments.allSatisfy({ $0.sourceRange.end <= asset.duration }),
               cropPaths.allSatisfy({ $0.sourceRange.end <= asset.duration }),
+              layoutCues.allSatisfy({ $0.sourceRange.end <= asset.duration }),
               captionTrack?.cues.allSatisfy({ $0.sourceRange.end <= asset.duration }) ?? true else {
             throw ModelError.invalid("ClipHelmEditSpec source bounds")
         }
@@ -207,13 +218,13 @@ public struct ClipHelmEditSpec: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case schemaVersion, clipID, sourceAssetID, segments, outputFormat
         case framingMode, pacingMode, soundMode, captionStyle
-        case layout, cropPaths, audioOperation, captionTrack
+        case layout, cropPaths, audioOperation, captionTrack, layoutCues
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let version = try c.decode(Int.self, forKey: .schemaVersion)
-        guard version == 1 || version == Self.currentVersion else {
+        guard (1...Self.currentVersion).contains(version) else {
             throw ModelError.invalid("ClipHelmEditSpec version")
         }
         let soundMode = version == 1
@@ -230,7 +241,8 @@ public struct ClipHelmEditSpec: Codable, Equatable, Sendable {
                       captionStyle: c.decodeIfPresent(CaptionStyle.self, forKey: .captionStyle),
                       layout: version == 1 ? nil : c.decode(LayoutMode.self, forKey: .layout),
                       cropPaths: version == 1 ? [] : c.decode([CropPath].self, forKey: .cropPaths),
-                      captionTrack: version == 1 ? nil : c.decodeIfPresent(CaptionTrack.self, forKey: .captionTrack))
+                      captionTrack: version == 1 ? nil : c.decodeIfPresent(CaptionTrack.self, forKey: .captionTrack),
+                      layoutCues: version < 3 ? [] : c.decode([LayoutCue].self, forKey: .layoutCues))
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -243,6 +255,7 @@ public struct ClipHelmEditSpec: Codable, Equatable, Sendable {
         try c.encode(framingMode, forKey: .framingMode)
         try c.encode(pacingMode, forKey: .pacingMode)
         try c.encode(layout, forKey: .layout)
+        try c.encode(layoutCues, forKey: .layoutCues)
         try c.encode(cropPaths, forKey: .cropPaths)
         try c.encode(audioOperation, forKey: .audioOperation)
         try c.encodeIfPresent(captionStyle, forKey: .captionStyle)

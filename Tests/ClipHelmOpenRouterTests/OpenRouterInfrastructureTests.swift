@@ -202,6 +202,24 @@ final class OpenRouterInfrastructureTests: XCTestCase {
         }
     }
 
+    func testLayoutVisionRequestsOnlyStructuredLabels() async throws {
+        let response = Data(#"{"choices":[{"message":{"content":"{\"kind\":\"ideCode\",\"confidence\":0.8}"}}]}"#.utf8)
+        StubURLProtocol.state.configure(status: 200, body: response)
+        let image = Data([0xFF, 0xD8, 0xFF, 0xD9])
+        _ = try await stubbedGateway().classifyLayoutFrames([image], modelID: "vendor/vision")
+        let request = try XCTUnwrap(StubURLProtocol.state.lastRequest())
+        XCTAssertEqual(request.url?.absoluteString, "https://openrouter.ai/api/v1/chat/completions")
+        let body = try XCTUnwrap(StubURLProtocol.state.lastRequestBody())
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        let schema = try XCTUnwrap((json["response_format"] as? [String: Any])?["json_schema"] as? [String: Any])
+        let fields = try XCTUnwrap((schema["schema"] as? [String: Any])?["properties"] as? [String: Any])
+        let kind = try XCTUnwrap(fields["kind"] as? [String: Any])
+        XCTAssertEqual(Set(kind["enum"] as? [String] ?? []),
+                       Set(["ideCode", "browserDemo", "slides", "softwareUI", "screenShare", "unknown"]))
+        XCTAssertEqual((json["provider"] as? [String: Bool])?["require_parameters"], true)
+        XCTAssertFalse(String(decoding: body, as: UTF8.self).contains("unit-test-token"))
+    }
+
     func testClipProposalUsesFixedEndpointStrictSchemaAndBoundedPrompt() async throws {
         StubURLProtocol.state.configure(status: 200,
             body: Data(#"{"choices":[{"message":{"content":"{\"title\":\"safe\"}"}}]}"#.utf8))

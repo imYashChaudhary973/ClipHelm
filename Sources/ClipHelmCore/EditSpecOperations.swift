@@ -16,6 +16,29 @@ public enum LayoutMode: String, Codable, Sendable {
     }
 }
 
+/// Renderer-independent composition for one source-time interval.
+public enum ShotLayout: String, Codable, CaseIterable, Sendable {
+    case original, speakerFocus, stackedSpeakers, sideBySide
+    case screenFocus, screenAndSpeaker, pictureInPicture
+}
+
+public enum LayoutOrigin: String, Codable, Sendable {
+    case automatic, manual
+}
+
+public struct LayoutCue: Codable, Equatable, Sendable {
+    public let sourceRange: MediaTimeRange
+    public let layout: ShotLayout
+    public let origin: LayoutOrigin
+
+    public init(sourceRange: MediaTimeRange, layout: ShotLayout,
+                origin: LayoutOrigin = .automatic) {
+        self.sourceRange = sourceRange
+        self.layout = layout
+        self.origin = origin
+    }
+}
+
 /// A fixed, renderer-independent audio decision. No filter strings or commands.
 public enum AudioOperation: String, Codable, Sendable {
     case original, normalize, mute
