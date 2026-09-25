@@ -62,7 +62,7 @@ struct WizardView: View {
                     .keyboardShortcut("[", modifiers: .command)
                     Spacer()
                     if step == .process {
-                        Button("Save Draft Project") { onSave(prepared) }
+                        Button("Create Project") { onSave(prepared) }
                             .buttonStyle(.borderedProminent)
                             .disabled(prepared == nil)
                     } else {
@@ -108,7 +108,7 @@ struct WizardView: View {
         case .sound: "Choose how clip audio should be handled."
         case .captions: "Choose a starting style for speech captions."
         case .review: "Check the direction before saving a project draft."
-        case .process: "Your draft is ready. Processing is coming in a later phase."
+        case .process: "Create the project, then process clips in its workspace."
         }
     }
 
@@ -198,10 +198,18 @@ struct WizardView: View {
                 ForEach(CanvasPreset.allCases) { preset in Text(preset.rawValue).tag(preset) }
             }
             .pickerStyle(.radioGroup)
+            Picker("Export resolution", selection: $draft.resolution) {
+                ForEach(RenderResolution.allCases) { option in Text(option.rawValue).tag(option) }
+            }
+            .frame(maxWidth: 220)
             Text(draft.preset == .vertical
                  ? "A tall canvas for vertical feeds and stories."
                  : "A wide canvas for landscape viewing.")
                 .foregroundStyle(.secondary)
+            if draft.resolution == .uhd4k {
+                Text("4K takes more time and disk space; the source should be 4K for full detail.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -333,7 +341,7 @@ struct WizardView: View {
             if let asset = prepared?.asset {
                 LabeledContent("Source media", value: "\(asset.width) × \(asset.height) · \(Int(asset.duration.microseconds / 1_000_000)) seconds")
             }
-            LabeledContent("Format", value: draft.preset.rawValue)
+            LabeledContent("Format", value: "\(draft.preset.rawValue) · \(draft.resolution.rawValue)")
             LabeledContent("Framing", value: draft.framingMode.label)
             LabeledContent("Pacing", value: draft.pacingMode.label)
             LabeledContent("Smart editing", value: smartEditSummary)
@@ -368,9 +376,9 @@ struct WizardView: View {
 
     private var processContent: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Label("Ready to save as a draft", systemImage: "checkmark.circle")
+            Label("Ready to create project", systemImage: "checkmark.circle")
                 .font(.title3.weight(.medium))
-            Text("Saving opens the project workspace with source playback. Clip processing and export are not active yet.")
+            Text("Save the project, then process clips from its workspace.")
                 .foregroundStyle(.secondary)
             Text("The original media stays untouched. ClipHelm saves source metadata, but source access must be granted again after relaunch.")
                 .font(.callout)

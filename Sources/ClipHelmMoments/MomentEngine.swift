@@ -351,7 +351,8 @@ private enum LocalMomentDiscovery {
                     Double(max(1, currentTokens.union(previous).count))
                 return !currentTokens.isEmpty && similarity >= 0.72
             }
-            if !duplicate && item.quality >= minimumQuality && item.proposal.confidence >= 0.45 {
+            let confidenceFloor = transcript?.hasMeaningfulSpeech == true ? 0.45 : minimumQuality
+            if !duplicate && item.quality >= minimumQuality && item.proposal.confidence >= confidenceFloor {
                 selected.append(item)
             }
             if let count, selected.count >= count { break }
