@@ -13,6 +13,7 @@ let package = Package(
         .library(name: "ClipHelmTranscription", targets: ["ClipHelmTranscription"]),
         .library(name: "ClipHelmAnalysis", targets: ["ClipHelmAnalysis"]),
         .library(name: "ClipHelmMoments", targets: ["ClipHelmMoments"]),
+        .library(name: "ClipHelmEditing", targets: ["ClipHelmEditing"]),
         .executable(name: "ClipHelmApp", targets: ["ClipHelmApp"]),
     ],
     targets: [
@@ -23,6 +24,7 @@ let package = Package(
         .target(name: "ClipHelmTranscription", dependencies: ["ClipHelmCore", "ClipHelmMedia", "ClipHelmOpenRouter"]),
         .target(name: "ClipHelmAnalysis", dependencies: ["ClipHelmCore", "ClipHelmMedia"]),
         .target(name: "ClipHelmMoments", dependencies: ["ClipHelmCore", "ClipHelmAnalysis", "ClipHelmOpenRouter"]),
+        .target(name: "ClipHelmEditing", dependencies: ["ClipHelmCore", "ClipHelmAnalysis"]),
         .target(name: "ClipHelmSources", dependencies: ["ClipHelmCore", "ClipHelmMedia"]),
         .executableTarget(name: "ClipHelmApp", dependencies: ["ClipHelmCore", "ClipHelmSecurity", "ClipHelmOpenRouter", "ClipHelmSources", "ClipHelmMedia", "ClipHelmTranscription", "ClipHelmAnalysis", "ClipHelmMoments"]),
         .testTarget(name: "ClipHelmCoreTests", dependencies: ["ClipHelmCore"]),
@@ -37,6 +39,7 @@ let package = Package(
         .testTarget(name: "ClipHelmAnalysisTests", dependencies: ["ClipHelmAnalysis", "ClipHelmCore", "ClipHelmMedia"],
                     resources: [.process("Fixtures")]),
         .testTarget(name: "ClipHelmMomentsTests", dependencies: ["ClipHelmMoments", "ClipHelmCore", "ClipHelmAnalysis", "ClipHelmOpenRouter"]),
+        .testTarget(name: "ClipHelmEditingTests", dependencies: ["ClipHelmEditing", "ClipHelmCore", "ClipHelmAnalysis"]),
         .testTarget(name: "ClipHelmAppTests", dependencies: ["ClipHelmApp", "ClipHelmCore"]),
     ]
 )
