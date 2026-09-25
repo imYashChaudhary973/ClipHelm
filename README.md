@@ -1,6 +1,6 @@
 # ClipHelm
 
-Native macOS clip editor in development. Phase 16 adds production-quality checks and a documented release gate; the app is not yet cleared for external release.
+Native macOS clip editor in development. The app is not yet cleared for external release; see the [release gate](docs/RELEASE_CHECKLIST.md) and [distribution procedure](docs/DISTRIBUTION.md).
 
 ## Run
 
@@ -35,4 +35,4 @@ The **Process Clips** action reuses saved transcripts and regeneratable analysis
 swift test --disable-sandbox
 ```
 
-The tests cover source validation, media and time mapping, transcription, local analysis, moment discovery, edit planning, project restoration, result revisions and batch export, mocked OpenRouter behavior, Keychain input validation, a network-free full processing run, and real 1080p/4K H.264 exports with crops, captions, and audio. The live Keychain CRUD test needs access to macOS Keychain. Module contracts are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). See the [quality baseline](docs/QUALITY_BENCHMARK.md), [security review](SECURITY.md), [privacy summary](PRIVACY.md), and [release checklist](RELEASE_CHECKLIST.md) before using ClipHelm outside development.
+The tests cover source validation, media and time mapping, transcription, local analysis, moment discovery, edit planning, project restoration, result revisions and batch export, mocked OpenRouter behavior, Keychain input validation, a network-free full processing run, and short 1080p/4K H.264 exports with crops, captions, and audio. The live Keychain CRUD test needs access to macOS Keychain. These fixtures do not establish real-video quality or long-form performance. Module contracts are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). See the [quality baseline](docs/QUALITY_BENCHMARK.md), [security review](SECURITY.md), [privacy summary](PRIVACY.md), and [release checklist](RELEASE_CHECKLIST.md) before using ClipHelm outside development.
