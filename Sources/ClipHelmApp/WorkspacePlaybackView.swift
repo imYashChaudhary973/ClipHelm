@@ -8,6 +8,7 @@ import ClipHelmOpenRouter
 import ClipHelmTranscription
 import ClipHelmAnalysis
 import ClipHelmMoments
+import ClipHelmCaptions
 import UniformTypeIdentifiers
 
 @MainActor
@@ -18,6 +19,7 @@ private final class WorkspacePlaybackController: ObservableObject {
     @Published var transcribing = false
     @Published var transcriptProgress: TranscriptProgress?
     @Published var transcript: Transcript?
+    @Published var captionProgram: CaptionProgram?
     @Published var analyzing = false
     @Published var analysisProgress: AnalysisProgress?
     @Published var analysis: AnalysisResult?
@@ -39,9 +41,11 @@ private final class WorkspacePlaybackController: ObservableObject {
     private var analysisJob: Task<Void, Never>?
     private var momentJob: Task<Void, Never>?
     private var catalogJob: Task<Void, Never>?
+    private var captionJob: Task<Void, Never>?
     private var transcriptionRunID = UUID()
     private var analysisRunID = UUID()
     private var momentRunID = UUID()
+    private var captionRunID = UUID()
 
     func start(project: ProjectRecord, source: PreparedSource?) {
         stop()
@@ -51,6 +55,8 @@ private final class WorkspacePlaybackController: ObservableObject {
         guard let source else { return }
         do { try engine.load(sourceURL: source.fileURL) }
         catch { message = "This source is no longer available. Choose it again in a new draft."; return }
+        prepareCaptions(transcript: project.transcript, configuration: project.configuration,
+                        asset: source.asset)
         proxyJob = Task { [weak self] in
             guard let self else { return }
             do {
@@ -103,7 +109,8 @@ private final class WorkspacePlaybackController: ObservableObject {
         }
     }
 
-    func transcribe(source: PreparedSource, useOpenRouter: Bool,
+    func transcribe(source: PreparedSource, configuration: ClipConfiguration,
+                    useOpenRouter: Bool,
                     save: @escaping @MainActor (Transcript) throws -> Void) {
         cancelMoments()
         transcriptJob?.cancel()
@@ -135,6 +142,8 @@ private final class WorkspacePlaybackController: ObservableObject {
                 guard transcriptionRunID == runID else { return }
                 try save(result)
                 transcript = result
+                prepareCaptions(transcript: result, configuration: configuration,
+                                asset: source.asset)
                 moments = nil
                 if !result.hasMeaningfulSpeech {
                     message = "No speech detected. Captions are off for this project."
@@ -254,6 +263,30 @@ private final class WorkspacePlaybackController: ObservableObject {
         }
     }
 
+    private func prepareCaptions(transcript: Transcript?, configuration: ClipConfiguration,
+                                 asset: MediaAsset) {
+        captionJob?.cancel()
+        captionProgram = nil
+        let runID = UUID()
+        captionRunID = runID
+        guard transcript?.assetID == asset.id else { return }
+        captionJob = Task.detached(priority: .utility) { [weak self] in
+            let program: CaptionProgram?
+            do {
+                let full = try MediaTimeRange(start: MediaTime(microseconds: 0), end: asset.duration)
+                let segments = [EditSegment(sourceRange: full)]
+                let track = try CaptionTrackBuilder().build(transcript: transcript,
+                    segments: segments, configuration: configuration)
+                program = try CaptionProgram(track: track, style: track == nil ? nil : configuration.captionStyle,
+                    segments: segments, format: configuration.outputFormat)
+            } catch { return }
+            await MainActor.run { [weak self] in
+                guard self?.captionRunID == runID else { return }
+                self?.captionProgram = program
+            }
+        }
+    }
+
     func cancelProxy() { proxyJob?.cancel(); preparingProxy = false }
     func cancelTranscription() {
         transcriptionRunID = UUID()
@@ -282,11 +315,14 @@ private final class WorkspacePlaybackController: ObservableObject {
         analysisRunID = UUID()
         momentRunID = UUID()
         catalogJob?.cancel()
+        captionJob?.cancel()
         proxyJob = nil
         transcriptJob = nil
         analysisJob = nil
         momentJob = nil
         catalogJob = nil
+        captionJob = nil
+        captionRunID = UUID()
         preparingProxy = false
         transcribing = false
         analyzing = false
@@ -297,6 +333,7 @@ private final class WorkspacePlaybackController: ObservableObject {
         transcriptProgress = nil
         analysisProgress = nil
         momentProgress = nil
+        captionProgram = nil
         analysis = nil
         moments = nil
         message = nil
@@ -329,8 +366,12 @@ struct WorkspacePlaybackView: View {
         VStack(alignment: .leading, spacing: 16) {
             ZStack {
                 RoundedRectangle(cornerRadius: 8).fill(.black)
-                if source != nil {
+                if let source {
                     VideoPlayer(player: controller.engine.player)
+                    if let program = controller.captionProgram {
+                        CaptionPreviewView(program: program, engine: controller.engine,
+                                           asset: source.asset)
+                    }
                 } else {
                     ContentUnavailableView("Source access needed", systemImage: "play.rectangle",
                         description: Text("Locate the original video to play and seek in this project."))
@@ -434,7 +475,8 @@ struct WorkspacePlaybackView: View {
                     }
                 } else {
                     Button(useOpenRouter ? "Transcribe with OpenRouter (uses credits)" : "Transcribe on This Mac") {
-                        controller.transcribe(source: source, useOpenRouter: useOpenRouter,
+                        controller.transcribe(source: source, configuration: project.configuration,
+                                              useOpenRouter: useOpenRouter,
                                               save: saveTranscript)
                     }
                     .disabled(useOpenRouter && controller.selectedModelID.isEmpty)
