@@ -2,6 +2,7 @@ import Foundation
 import ClipHelmCore
 import ClipHelmAnalysis
 import ClipHelmFraming
+import ClipHelmLayouts
 
 /// Converts validated suggestions and local evidence into renderer-independent decisions.
 public struct ClipPlanner: Sendable {
@@ -10,7 +11,8 @@ public struct ClipPlanner: Sendable {
     public func plan(clipID: ClipID, proposal: ClipProposal, configuration: ClipConfiguration,
                      asset: MediaAsset, analysis: AnalysisResult, intent: AIEditIntent? = nil,
                      transcript: Transcript? = nil,
-                     visionHints: [ContentClassification] = []) throws -> ClipHelmEditSpec {
+                     visionHints: [ContentClassification] = [],
+                     screenHints: [ScreenContentHint] = []) throws -> ClipHelmEditSpec {
         try proposal.validate(for: asset)
         try analysis.validate(for: asset)
         try intent?.validate(for: proposal)
@@ -25,7 +27,8 @@ public struct ClipPlanner: Sendable {
         var retained: [MediaTimeRange] = []
         var cursor = range.start
         for cut in try pauseCuts(in: range, configuration: configuration,
-                                 analysis: analysis, preserveDemo: intent?.preserveDemo == true) {
+                                 analysis: analysis, screenHints: screenHints,
+                                 preserveDemo: intent?.preserveDemo == true) {
             if cursor < cut.start {
                 retained.append(try MediaTimeRange(start: cursor, end: cut.start))
             }
@@ -37,10 +40,15 @@ public struct ClipPlanner: Sendable {
         }
         let segments = retained.map(EditSegment.init(sourceRange:))
         let layout = LayoutMode(framing: configuration.framingMode)
+        let layoutCues = try configuration.framingMode == .smartAuto
+            ? SmartLayoutEngine().plan(segments: segments, asset: asset,
+                format: configuration.outputFormat, analysis: analysis,
+                keepDemos: configuration.smartEdit.keepDemos, screenHints: screenHints)
+            : []
         let crops: [CropPath]
         switch configuration.framingMode {
         case .smartAuto:
-            crops = try segments.flatMap { try SmartAutoFrameEngine().frame(
+            crops = try layoutCues.filter { $0.layout == .speakerFocus }.flatMap { try SmartAutoFrameEngine().frame(
                 range: $0.sourceRange, asset: asset, format: configuration.outputFormat,
                 analysis: analysis, visionHints: visionHints).paths }
         case .fullFrame:
@@ -65,13 +73,15 @@ public struct ClipPlanner: Sendable {
                                        pacingMode: configuration.pacingMode,
                                        soundMode: configuration.soundMode,
                                        captionStyle: captions == nil ? nil : configuration.captionStyle,
-                                       layout: layout, cropPaths: crops, captionTrack: captions)
+                                       layout: layout, cropPaths: crops, captionTrack: captions,
+                                       layoutCues: layoutCues)
         try EditSpecValidator().validate(spec, for: asset, proposal: proposal)
         return spec
     }
 
     private func pauseCuts(in range: MediaTimeRange, configuration: ClipConfiguration,
-                           analysis: AnalysisResult, preserveDemo: Bool) throws -> [MediaTimeRange] {
+                           analysis: AnalysisResult, screenHints: [ScreenContentHint],
+                           preserveDemo: Bool) throws -> [MediaTimeRange] {
         let thresholds: (edge: Int64, middle: Int64)
         switch configuration.pacingMode {
         case .natural: thresholds = (2_000_000, 3_000_000)
@@ -88,10 +98,21 @@ public struct ClipPlanner: Sendable {
                   pause.durationMicroseconds >= (atEdge ? thresholds.edge : thresholds.middle) else {
                 continue
             }
-            if (configuration.smartEdit.keepDemos || preserveDemo) && analysis.classifications.contains(where: {
-                $0.kind == .demo && $0.confidence >= 0.6 &&
-                $0.range.start < pause.end && pause.start < $0.range.end
-            }) { continue }
+            if configuration.smartEdit.keepDemos || preserveDemo {
+                let classified = analysis.classifications.contains {
+                    [.demo, .screenShare, .presentation].contains($0.kind) && $0.confidence >= 0.45 &&
+                    $0.range.start < pause.end && pause.start < $0.range.end
+                }
+                let visibleScreen = analysis.signals.contains {
+                    $0.kind == .screenContent && $0.strength * $0.confidence >= 0.3 &&
+                    $0.range.start < pause.end && pause.start < $0.range.end
+                }
+                let detectedScreen = screenHints.contains {
+                    $0.kind != .unknown && $0.confidence >= 0.6 &&
+                    $0.range.start < pause.end && pause.start < $0.range.end
+                }
+                if classified || visibleScreen || detectedScreen { continue }
+            }
             if atEdge {
                 cuts.append(pause)
             } else {

@@ -5,6 +5,7 @@ public enum EditOperation: Sendable {
     case remove(MediaTimeRange)
     case setCropPaths([CropPath])
     case setLayout(LayoutMode)
+    case overrideShotLayout(range: MediaTimeRange, layout: ShotLayout)
     case setAudio(AudioOperation)
     case setCaptions(style: CaptionStyle?, track: CaptionTrack?)
 }
@@ -29,6 +30,7 @@ public struct EditHistory: Sendable {
         var segments = current.segments
         var crops = current.cropPaths
         var layout = current.layout
+        var layoutCues = current.layoutCues
         var framing = current.framingMode
         var audio = current.audioOperation
         var style = current.captionStyle
@@ -52,6 +54,30 @@ public struct EditHistory: Sendable {
             case .blurredBackground: framing = .blurred
             }
             if mode != .fill { crops = [] }
+            if mode != .fill { layoutCues = [] }
+        case .overrideShotLayout(let range, let choice):
+            guard contains(range, in: segments), layout == .fill else {
+                throw ModelError.invalid("EditHistory layout range")
+            }
+            var updated: [LayoutCue] = []
+            for cue in layoutCues {
+                if cue.sourceRange.end <= range.start || range.end <= cue.sourceRange.start {
+                    updated.append(cue)
+                } else {
+                    if cue.sourceRange.start < range.start {
+                        updated.append(LayoutCue(sourceRange: try MediaTimeRange(
+                            start: cue.sourceRange.start, end: range.start),
+                            layout: cue.layout, origin: cue.origin))
+                    }
+                    if range.end < cue.sourceRange.end {
+                        updated.append(LayoutCue(sourceRange: try MediaTimeRange(
+                            start: range.end, end: cue.sourceRange.end),
+                            layout: cue.layout, origin: cue.origin))
+                    }
+                }
+            }
+            updated.append(LayoutCue(sourceRange: range, layout: choice, origin: .manual))
+            layoutCues = updated.sorted { $0.sourceRange.start < $1.sourceRange.start }
         case .setAudio(let operation): audio = operation
         case .setCaptions(let newStyle, let track):
             style = newStyle
@@ -64,6 +90,13 @@ public struct EditHistory: Sendable {
 
         func retainTimedEdits() throws {
             crops = crops.filter { contains($0.sourceRange, in: segments) }
+            layoutCues = try layoutCues.flatMap { cue in
+                try segments.compactMap { segment in
+                    try intersection(cue.sourceRange, segment.sourceRange).map {
+                        LayoutCue(sourceRange: $0, layout: cue.layout, origin: cue.origin)
+                    }
+                }
+            }
             if let track = captions {
                 let cues = track.cues.filter { contains($0.sourceRange, in: segments) }
                 captions = cues.isEmpty ? nil : try CaptionTrack(cues: cues,
@@ -76,7 +109,8 @@ public struct EditHistory: Sendable {
                                        segments: segments, outputFormat: current.outputFormat,
                                        framingMode: framing, pacingMode: current.pacingMode,
                                        soundMode: audio.soundMode, captionStyle: style,
-                                       layout: layout, cropPaths: crops, captionTrack: captions)
+                                       layout: layout, cropPaths: crops, captionTrack: captions,
+                                       layoutCues: layoutCues)
         try EditSpecValidator().validate(next, for: asset, proposal: proposal)
         guard next != current else { return }
         past.append(current)

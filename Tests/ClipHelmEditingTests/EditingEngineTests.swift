@@ -62,7 +62,7 @@ final class EditingEngineTests: XCTestCase {
         let spec = try ClipPlanner().plan(clipID: clipID, proposal: proposal,
             configuration: configuration(), asset: source, analysis: local, transcript: transcript)
         XCTAssertEqual(spec.clipID, clipID)
-        XCTAssertEqual(spec.schemaVersion, 2)
+        XCTAssertEqual(spec.schemaVersion, 3)
         XCTAssertEqual(spec.segments.map(\.sourceRange), try [range(2, 5.2), range(6.8, 60)])
         XCTAssertEqual(spec.layout, .fill)
         XCTAssertEqual(spec.audioOperation, .normalize)
@@ -148,6 +148,47 @@ final class EditingEngineTests: XCTestCase {
         XCTAssertTrue(spec.cropPaths.isEmpty)
         XCTAssertNil(spec.captionStyle)
         XCTAssertNil(spec.captionTrack)
+    }
+
+    func testKeepDemosProtectsScreenActivityFromPauseCuts() throws {
+        let source = try asset(12)
+        let pause = try LocalSignal(kind: .pause, range: range(2, 5),
+                                    strength: 0.9, confidence: 0.9)
+        let local = try analysis(for: source, signals: [pause], kind: .screenShare)
+        let proposal = try ClipProposal(assetID: source.id, range: range(0, 12),
+                                         title: "Demo", rationale: "", confidence: 0.8)
+        let protected = try ClipPlanner().plan(clipID: ClipID(), proposal: proposal,
+            configuration: configuration(keepDemos: true), asset: source, analysis: local)
+        XCTAssertEqual(protected.segments.map(\.sourceRange), [try range(0, 12)])
+        XCTAssertEqual(protected.layoutCues.map(\.layout), [.screenFocus])
+        XCTAssertTrue(protected.cropPaths.isEmpty)
+        let ordinary = try ClipPlanner().plan(clipID: ClipID(), proposal: proposal,
+            configuration: configuration(), asset: source, analysis: local)
+        XCTAssertEqual(ordinary.segments.count, 2)
+    }
+
+    func testManualLayoutOverrideSurvivesUndoRedoAndRemoval() throws {
+        let source = try asset()
+        let proposal = try ClipProposal(assetID: source.id, range: range(0, 60),
+                                         title: "Edit", rationale: "", confidence: 0.8)
+        let initial = try ClipPlanner().plan(clipID: ClipID(), proposal: proposal,
+            configuration: configuration(), asset: source, analysis: analysis(for: source))
+        var history = try EditHistory(initial: initial, asset: source, proposal: proposal)
+        try history.apply(.overrideShotLayout(range: range(10, 20), layout: .screenFocus),
+                          asset: source, proposal: proposal)
+        XCTAssertEqual(history.current.layoutCues.map(\.layout),
+                       [.speakerFocus, .screenFocus, .speakerFocus])
+        XCTAssertEqual(history.current.layoutCues.map(\.origin),
+                       [.automatic, .manual, .automatic])
+        XCTAssertTrue(history.undo())
+        XCTAssertEqual(history.current, initial)
+        XCTAssertTrue(history.redo())
+        try history.apply(.remove(range(12, 14)), asset: source, proposal: proposal)
+        XCTAssertEqual(history.current.layoutCues.map(\.sourceRange),
+                       try [range(0, 10), range(10, 12), range(14, 20), range(20, 60)])
+        XCTAssertThrowsError(try history.apply(.overrideShotLayout(range: range(11, 15),
+            layout: .pictureInPicture), asset: source, proposal: proposal))
+        XCTAssertNoThrow(try EditSpecValidator().validate(history.current, for: source))
     }
 
     func testTimelineMapsCutsAndLongSourceTimes() throws {
@@ -288,8 +329,23 @@ final class EditingEngineTests: XCTestCase {
         json["soundMode"] = "source"
         let migrated = try JSONDecoder().decode(ClipHelmEditSpec.self,
             from: JSONSerialization.data(withJSONObject: json))
-        XCTAssertEqual(migrated.schemaVersion, 2)
+        XCTAssertEqual(migrated.schemaVersion, 3)
         XCTAssertEqual(migrated.layout, .fill)
         XCTAssertTrue(migrated.cropPaths.isEmpty)
+        XCTAssertTrue(migrated.layoutCues.isEmpty)
+
+        var versionTwo = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(spec)) as? [String: Any])
+        versionTwo["schemaVersion"] = 2
+        versionTwo.removeValue(forKey: "layoutCues")
+        let migratedTwo = try JSONDecoder().decode(ClipHelmEditSpec.self,
+            from: JSONSerialization.data(withJSONObject: versionTwo))
+        XCTAssertEqual(migratedTwo.schemaVersion, 3)
+        XCTAssertTrue(migratedTwo.layoutCues.isEmpty)
+
+        var wrongCue = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(spec)) as? [String: Any])
+        wrongCue["layoutCues"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode([
+            LayoutCue(sourceRange: range(20, 21), layout: .screenFocus)]))
+        XCTAssertThrowsError(try JSONDecoder().decode(ClipHelmEditSpec.self,
+            from: JSONSerialization.data(withJSONObject: wrongCue)))
     }
 }
