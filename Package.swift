@@ -61,7 +61,7 @@ let package = Package(
         .testTarget(name: "ClipHelmPacingTests", dependencies: ["ClipHelmPacing", "ClipHelmEditing", "ClipHelmCore", "ClipHelmAnalysis"]),
         .testTarget(name: "ClipHelmCaptionsTests", dependencies: ["ClipHelmCaptions", "ClipHelmEditing", "ClipHelmCore"]),
         .testTarget(name: "ClipHelmRenderingTests", dependencies: ["ClipHelmRendering", "ClipHelmCore", "ClipHelmMedia"], resources: [.process("Fixtures")]),
-        .testTarget(name: "ClipHelmProcessingTests", dependencies: ["ClipHelmProcessing", "ClipHelmCore", "ClipHelmOpenRouter", "ClipHelmSources", "ClipHelmTranscription", "ClipHelmAnalysis", "ClipHelmMoments", "ClipHelmRendering", "ClipHelmMedia"], resources: [.process("Fixtures")]),
+        .testTarget(name: "ClipHelmProcessingTests", dependencies: ["ClipHelmProcessing", "ClipHelmCore", "ClipHelmOpenRouter", "ClipHelmSecurity", "ClipHelmSources", "ClipHelmTranscription", "ClipHelmAnalysis", "ClipHelmMoments", "ClipHelmRendering", "ClipHelmMedia"], resources: [.process("Fixtures")]),
         .testTarget(name: "ClipHelmAppTests", dependencies: ["ClipHelmApp", "ClipHelmCore", "ClipHelmSources", "ClipHelmAnalysis", "ClipHelmProcessing"], resources: [.process("Fixtures")]),
     ]
 )
