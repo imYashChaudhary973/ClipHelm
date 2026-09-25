@@ -5,7 +5,7 @@ enum AppRoute: String, Hashable {
 }
 
 enum WizardStep: Int, CaseIterable, Identifiable {
-    case source, format, framing, smartEditing, length, number, sound, captions, review, process
+    case source, format, framing, smartEditing, length, number, sound, captions, models, review, process
 
     var id: Int { rawValue }
     var title: String {
@@ -18,8 +18,9 @@ enum WizardStep: Int, CaseIterable, Identifiable {
         case .number: "Number of Clips"
         case .sound: "Sound"
         case .captions: "Captions"
+        case .models: "AI Models"
         case .review: "Review Settings"
-        case .process: "Process"
+        case .process: "Create"
         }
     }
 }

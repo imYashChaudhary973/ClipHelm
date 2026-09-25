@@ -55,62 +55,28 @@ final class QuickClipModel: ObservableObject {
         }
     }
 
-    func start(ingestor: SourceIngestor, onReady: @escaping @MainActor (PreparedSource, String) -> Void) {
+    /// Validates the link; the download itself starts in the pipeline.
+    func descriptor() -> SourceDescriptor? {
         let raw = link.trimmingCharacters(in: .whitespacesAndNewlines)
-        let descriptor: SourceDescriptor
         do {
-            descriptor = try SourceDescriptor(remoteURL: raw, youtube: true, authorized: authorized)
+            let descriptor = try SourceDescriptor(remoteURL: raw, youtube: true, authorized: authorized)
+            message = nil
+            return descriptor
         } catch let error as SourceIngestError {
             message = error == .unsupportedSource
                 ? "Paste a YouTube video link, such as https://www.youtube.com/watch?v=…"
                 : error.localizedDescription
-            return
         } catch {
             message = "Paste a YouTube video link."
-            return
         }
-        message = nil
-        job = Task {
-            do {
-                if YouTubeToolManager.shared.installedExecutable() == nil {
-                    stage = .installingTool
-                    _ = try await YouTubeToolManager.shared.install()
-                }
-                stage = .downloading(nil)
-                let prepared = try await ingestor.prepare(descriptor) { [weak self] update in
-                    Task { @MainActor [weak self] in
-                        guard let self, case .downloading = self.stage else { return }
-                        if update.stage == .validating { self.stage = .preparing }
-                        else if let fraction = update.fraction { self.stage = .downloading(fraction) }
-                    }
-                }
-                try Task.checkCancellation()
-                stage = .idle
-                link = ""
-                onReady(prepared, raw)
-            } catch is CancellationError {
-                stage = .idle
-            } catch let error as LocalizedError {
-                stage = .idle
-                message = error.errorDescription ?? "The video could not be prepared. Try again."
-            } catch {
-                stage = .idle
-                message = "The video could not be prepared. Try again."
-            }
-        }
-    }
-
-    func cancel() {
-        job?.cancel()
-        job = nil
-        stage = .idle
+        return nil
     }
 }
 
-/// Paste a key and a YouTube link; ClipHelm downloads, finds moments, and renders captioned clips.
+/// Paste a key and a YouTube link; the download starts while clip options are chosen.
 struct QuickClipView: View {
-    let ingestor: SourceIngestor
-    let onReady: @MainActor (PreparedSource, String) -> Void
+    /// Receives the validated link and its descriptor.
+    let onContinue: @MainActor (String, SourceDescriptor) -> Void
     @StateObject private var model = QuickClipModel()
 
     var body: some View {
@@ -138,45 +104,34 @@ struct QuickClipView: View {
                 .textFieldStyle(.roundedBorder)
                 .accessibilityLabel("YouTube link")
                 .disabled(model.busy || !model.hasKey)
+                .onSubmit(proceed)
             Toggle("I own this video or have permission to process it", isOn: $model.authorized)
                 .disabled(model.busy || !model.hasKey)
             HStack(spacing: DS.Space.sm) {
-                Button {
-                    model.start(ingestor: ingestor, onReady: onReady)
-                } label: {
-                    Label("Make Clips", systemImage: "wand.and.stars")
+                Button(action: proceed) {
+                    Label("Choose Clip Options", systemImage: "slider.horizontal.3")
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .disabled(model.busy || !model.hasKey || !model.authorized || model.link.isEmpty)
-                if model.busy {
-                    progress
-                    if model.stage != .savingKey { Button("Cancel") { model.cancel() } }
-                }
+                if model.stage == .savingKey { TaskProgressRow(label: "Checking key…", fraction: nil) }
             }
             if let message = model.message {
                 StatusMessage(text: message, tone: .info)
             }
-            StatusMessage(text: "Uses your saved clip settings (change them with New Clip Project). The first import installs the free yt-dlp downloader from its official GitHub release. Finding moments sends transcript excerpts to OpenRouter and uses API credits.",
+            StatusMessage(text: "The video starts downloading right away while you choose format, captions, and AI models. Then press Start in the project.",
                           tone: .neutral)
         }
         .surfaceCard(padding: DS.Space.lg, highlighted: true)
         .task { await model.refresh() }
     }
 
-    @ViewBuilder
-    private var progress: some View {
-        switch model.stage {
-        case .idle: EmptyView()
-        case .savingKey: label("Checking key…", fraction: nil)
-        case .installingTool: label("Installing YouTube downloader…", fraction: nil)
-        case .downloading(let fraction): label("Downloading video…", fraction: fraction)
-        case .preparing: label("Preparing video…", fraction: nil)
-        }
-    }
-
-    private func label(_ text: String, fraction: Double?) -> some View {
-        TaskProgressRow(label: text, fraction: fraction)
+    private func proceed() {
+        guard let descriptor = model.descriptor() else { return }
+        let link = model.link.trimmingCharacters(in: .whitespacesAndNewlines)
+        model.link = ""
+        model.authorized = false
+        onContinue(link, descriptor)
     }
 }
 

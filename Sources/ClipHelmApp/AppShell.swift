@@ -9,9 +9,8 @@ struct AppShell: View {
     @State private var draft = ProjectDraft()
     @State private var errorMessage = ""
     @State private var showsError = false
-    @State private var sourceIngestor = SourceIngestor()
-    @State private var sessionSources: [ProjectID: PreparedSource] = [:]
-    @State private var autoProcessProjects: Set<ProjectID> = []
+    @StateObject private var pipeline = ClipPipeline()
+    @State private var authorizedRemote = false
 
     init(navigation: NavigationState, store: ProjectStore = ProjectStore()) {
         self.navigation = navigation
@@ -38,8 +37,8 @@ struct AppShell: View {
                 case .home: home
                 case .recent: recent
                 case .newProject:
-                    WizardView(draft: $draft, step: $navigation.step,
-                               ingestor: sourceIngestor, onSave: saveDraft)
+                    WizardView(draft: $draft, step: $navigation.step, pipeline: pipeline,
+                               authorizedRemote: $authorizedRemote, onSave: saveDraft)
                 case .settings: settings
                 case .workspace:
                     if let selectedProject {
@@ -121,7 +120,7 @@ struct AppShell: View {
                         .tracking(-1)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityAddTraits(.isHeader)
-                    Text("Paste a YouTube link for captioned clips in one step, or set up a project to shape every detail.")
+                    Text("Paste a YouTube link and choose your clip options while it downloads. Then press Start and ClipHelm finds the best moments.")
                         .font(.title3)
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: 600, alignment: .leading)
@@ -129,7 +128,7 @@ struct AppShell: View {
                 }
 
                 VStack(alignment: .leading, spacing: DS.Space.sm) {
-                    QuickClipView(ingestor: sourceIngestor, onReady: startQuickProject)
+                    QuickClipView(onContinue: continueWithLink)
                     HStack(spacing: DS.Space.sm) {
                         Text("Have a local file, or want to choose format, framing, and captions?")
                             .foregroundStyle(.secondary)
@@ -311,30 +310,72 @@ struct AppShell: View {
                     StatusBadge(text: project.clips.isEmpty ? "Draft" : "\(project.clips.count) clips saved",
                                 tone: project.clips.isEmpty ? .neutral : .success)
                 }
-                if !project.clips.isEmpty {
+                // Finished clips lead; before there are any, Start is the page's one action.
+                if project.clips.isEmpty {
+                    jobCard(project)
+                } else {
                     results(project)
+                    jobCard(project)
                 }
-                WorkspacePlaybackView(project: project, source: sessionSources[project.id],
+                WorkspacePlaybackView(project: project, source: pipeline.sources[project.id],
                     analysisCacheDirectory: try? store.analysisCacheDirectory(for: project.id),
                     exportsDirectory: try? store.exportsDirectory(for: project.id),
-                    ingestor: sourceIngestor,
-                    autoProcess: autoProcessProjects.contains(project.id),
-                    didStartAutoProcess: { autoProcessProjects.remove(project.id) },
+                    ingestor: pipeline.ingestor,
                     saveTranscript: { try store.saveTranscript($0, for: project.id) },
                     saveProcessingResult: { try store.saveProcessingResult($0, for: project.id) },
                     reattachSource: { try await reattachSource($0, to: project) },
                     reattachRemote: { try await reattachRemote($0, authorized: $1,
                         to: project, progress: $2) })
-                if project.clips.isEmpty {
-                    results(project)
-                }
             }
             .readableColumn(DS.Width.content, padding: DS.Space.lg)
         }
     }
 
+    private func jobCard(_ project: ProjectRecord) -> some View {
+        let job = pipeline.job(for: project.id)
+        return ClipJobCard(job: job, hasClips: !project.clips.isEmpty,
+                           startBlocker: startBlocker(project, job: job),
+                           summary: jobSummary(project),
+                           onStart: { pipeline.start(project, store: store) },
+                           onCancel: { pipeline.cancel(project.id) })
+            .task { await pipeline.loadCatalog() }
+    }
+
+    private func startBlocker(_ project: ProjectRecord, job: ClipJob) -> String? {
+        if pipeline.sources[project.id] != nil { return nil }
+        if let failure = job.source?.failure { return failure }
+        if job.source != nil { return nil }
+        return project.sourceKind == .local
+            ? "Locate the original video below to start."
+            : "Re-enter the video link below to start."
+    }
+
+    private func jobSummary(_ project: ProjectRecord) -> [(label: String, value: String)] {
+        let configuration = project.configuration
+        let lengths = configuration.selectedLengths.isEmpty
+            ? "Auto length (10 s – 2 min)" : configuration.selectedLengths.map(\.label).joined(separator: ", ")
+        let transcription: String
+        if project.transcript != nil {
+            transcription = "Saved transcript"
+        } else if project.transcriptionModelID == ClipPipeline.onDeviceTranscription {
+            transcription = "On this Mac"
+        } else if let id = pipeline.resolvedTranscriptionModelID(project.transcriptionModelID) {
+            transcription = pipeline.transcriptionModels.first { $0.id == id }?.name ?? id
+        } else {
+            transcription = "Recommended OpenRouter model (on this Mac without a key)"
+        }
+        return [
+            ("Format", "\(configuration.outputFormat.width) × \(configuration.outputFormat.height) · \(configuration.framingMode.label)"),
+            ("Captions", configuration.captionStyle?.label ?? "Off"),
+            ("Clips", "\(configuration.requestedClipCount.map { "Up to \($0)" } ?? "AI decides") · \(lengths)"),
+            ("Transcription", transcription),
+            ("Moments", (project.momentModelID ?? pipeline.recommendedMomentModelID)
+                .map { id in pipeline.momentModels.first { $0.id == id }?.name ?? id } ?? "Recommended model"),
+        ]
+    }
+
     private func results(_ project: ProjectRecord) -> some View {
-        ClipResultsView(project: project, source: sessionSources[project.id],
+        ClipResultsView(project: project, source: pipeline.sources[project.id],
             exportsDirectory: try? store.exportsDirectory(for: project.id),
             cacheDirectory: try? store.analysisCacheDirectory(for: project.id),
             saveClip: { try store.updateClip($0, for: project.id) },
@@ -365,12 +406,18 @@ struct AppShell: View {
         .inspectorColumnWidth(min: 240, ideal: 280, max: 340)
     }
 
-    private func saveDraft(source: PreparedSource?) {
+    private func saveDraft() {
         do {
-            let project = try store.save(draft: draft, mediaAsset: source?.asset)
-            if let source { sessionSources[project.id] = source }
-            if source != nil { autoProcessProjects.insert(project.id) }
-            draft = ProjectDraft()
+            var saving = draft
+            let prepared = pipeline.draftSource?.prepared
+            if saving.title == ProjectDraft().title, let title = prepared?.title { saving.title = title }
+            let project = try store.save(draft: saving, mediaAsset: prepared?.asset)
+            pipeline.adoptDraftSource(for: project.id)
+            // Keep the chosen options as the next project's defaults; only the source resets.
+            draft.title = ProjectDraft().title
+            draft.remoteURL = ""
+            draft.sourceName = ""
+            authorizedRemote = false
             navigation.openProject(project.id.rawValue)
         } catch {
             errorMessage = "Check the source and project name, then try again."
@@ -378,23 +425,14 @@ struct AppShell: View {
         }
     }
 
-    /// Creates a project from the saved clip preferences and starts processing it in the workspace.
-    private func startQuickProject(_ source: PreparedSource, link: String) {
-        var quick = draft
-        quick.sourceKind = .youtube
-        quick.remoteURL = link
-        quick.sourceName = ""
-        quick.title = source.title ?? "YouTube Clips"
-        quick.captionsEnabled = quick.captionsEnabled && source.hasAudio
-        do {
-            let project = try store.save(draft: quick, mediaAsset: source.asset)
-            sessionSources[project.id] = source
-            autoProcessProjects.insert(project.id)
-            navigation.openProject(project.id.rawValue)
-        } catch {
-            errorMessage = "The project could not be created. Check available disk space and try again."
-            showsError = true
-        }
+    /// Home's link entry: start the download and continue to the clip options.
+    private func continueWithLink(_ link: String, descriptor: SourceDescriptor) {
+        draft.sourceKind = .youtube
+        draft.remoteURL = link
+        authorizedRemote = true
+        pipeline.prepareDraftSource(descriptor)
+        navigation.step = .format
+        navigation.route = .newProject
     }
 
     private func reattachSource(_ url: URL, to project: ProjectRecord) async throws {
@@ -402,14 +440,14 @@ struct AppShell: View {
               url.lastPathComponent == project.sourceLabel else {
             throw SourceIngestError.invalidMedia
         }
-        let prepared = try await sourceIngestor.prepare(SourceDescriptor(localFile: url))
+        let prepared = try await pipeline.ingestor.prepare(SourceDescriptor(localFile: url))
         guard prepared.asset.duration == original.duration,
               prepared.asset.width == original.width,
               prepared.asset.height == original.height else {
             throw SourceIngestError.invalidMedia
         }
-        sessionSources[project.id] = PreparedSource(descriptor: prepared.descriptor,
-            fileURL: prepared.fileURL, asset: original, hasAudio: prepared.hasAudio)
+        pipeline.setSource(PreparedSource(descriptor: prepared.descriptor,
+            fileURL: prepared.fileURL, asset: original, hasAudio: prepared.hasAudio), for: project.id)
     }
 
     private func reattachRemote(_ rawURL: String, authorized: Bool,
@@ -423,15 +461,15 @@ struct AppShell: View {
         guard URLComponents(string: rawURL)?.host?.lowercased() == project.sourceLabel else {
             throw SourceIngestError.invalidMedia
         }
-        let prepared = try await sourceIngestor.prepare(descriptor, progress: progress)
+        let prepared = try await pipeline.ingestor.prepare(descriptor, progress: progress)
         try Task.checkCancellation()
         guard prepared.asset.duration == original.duration,
               prepared.asset.width == original.width,
               prepared.asset.height == original.height else {
             throw SourceIngestError.invalidMedia
         }
-        sessionSources[project.id] = PreparedSource(descriptor: descriptor,
-            fileURL: prepared.fileURL, asset: original, hasAudio: prepared.hasAudio)
+        pipeline.setSource(PreparedSource(descriptor: descriptor,
+            fileURL: prepared.fileURL, asset: original, hasAudio: prepared.hasAudio), for: project.id)
     }
 
     private static var versionLabel: String {

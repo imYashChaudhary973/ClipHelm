@@ -263,34 +263,6 @@ private final class WorkspacePlaybackController: ObservableObject {
         }
     }
 
-    /// Chooses models and processes immediately; used after a quick YouTube import.
-    func autoProcess(project: ProjectRecord, source: PreparedSource, ingestor: SourceIngestor,
-                     cacheDirectory: URL, outputDirectory: URL,
-                     save: @escaping @MainActor (ProcessingResult) throws -> Void) {
-        catalogJob?.cancel()
-        processing = true
-        processingProgress = ProcessingProgress(stage: .preparing, fraction: 0, detail: "Choosing OpenRouter models")
-        message = nil
-        catalogJob = Task { [weak self] in
-            guard let self else { return }
-            do {
-                if momentModels.isEmpty { try await refreshMomentModels() }
-                try Task.checkCancellation()
-                processing = false
-                process(project: project, source: source, ingestor: ingestor,
-                        cacheDirectory: cacheDirectory, outputDirectory: outputDirectory, save: save)
-            } catch is CancellationError {
-                processing = false
-            } catch let error as LocalizedError {
-                processing = false
-                message = error.errorDescription ?? "Could not load OpenRouter models. Check the key in Settings."
-            } catch {
-                processing = false
-                message = "Could not load OpenRouter models. Check the key in Settings."
-            }
-        }
-    }
-
     func discoverMoments(source: PreparedSource, lengths: [ClipLength]) {
         guard let analysis else { return }
         momentJob?.cancel()
@@ -490,8 +462,6 @@ struct WorkspacePlaybackView: View {
     let analysisCacheDirectory: URL?
     let exportsDirectory: URL?
     let ingestor: SourceIngestor
-    var autoProcess = false
-    var didStartAutoProcess: @MainActor () -> Void = { }
     let saveTranscript: @MainActor (Transcript) throws -> Void
     let saveProcessingResult: @MainActor (ProcessingResult) throws -> Void
     let reattachSource: @MainActor (URL) async throws -> Void
@@ -517,8 +487,6 @@ struct WorkspacePlaybackView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Space.lg) {
-            // A quick YouTube import starts processing on arrival; keep its progress in view.
-            if controller.processing { processingBanner }
             player
             if source == nil { sourceAccessCard }
             if controller.preparingProxy {
@@ -531,12 +499,10 @@ struct WorkspacePlaybackView: View {
                     .surfaceCard(padding: DS.Space.sm)
             }
 
-            processCard
-
             VStack(alignment: .leading, spacing: DS.Space.xxs) {
                 Text("Explore the source").font(.title2.weight(.semibold))
                     .accessibilityAddTraits(.isHeader)
-                Text("Optional. Inspect local analysis, speech, and candidate moments before or after processing.")
+                Text("Optional. Inspect local analysis, speech, and candidate moments. Start above makes the clips.")
                     .foregroundStyle(.secondary)
             }
             .padding(.top, DS.Space.xs)
@@ -547,12 +513,6 @@ struct WorkspacePlaybackView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .task(id: source?.fileURL) {
             controller.start(project: project, source: source)
-            if autoProcess, let source, let analysisCacheDirectory, let exportsDirectory {
-                didStartAutoProcess()
-                controller.autoProcess(project: project, source: source, ingestor: ingestor,
-                    cacheDirectory: analysisCacheDirectory, outputDirectory: exportsDirectory,
-                    save: saveProcessingResult)
-            }
         }
         .onDisappear { reattachTask?.cancel(); controller.stop() }
         .fileImporter(isPresented: $showingSourcePicker,
@@ -661,79 +621,6 @@ struct WorkspacePlaybackView: View {
             }
         }
         .surfaceCard(highlighted: true)
-    }
-
-    // MARK: Process (primary)
-
-    private var processStatus: (text: String, tone: StatusTone) {
-        if controller.processing { return ("Running", .info) }
-        if source == nil { return ("Needs source", .warning) }
-        if !project.clips.isEmpty { return ("\(project.clips.count) clips saved", .success) }
-        return ("Ready", .neutral)
-    }
-
-    private var processCard: some View {
-        StageCard(eyebrow: "Recommended", title: "Process clips", systemImage: "scissors",
-                  status: processStatus, highlighted: source != nil && !controller.processing) {
-            if source?.hasAudio == true || project.configuration.smartEdit.useVisionForTrickyShots {
-                Button(controller.loadingMomentModels ? "Loading…" : "Load Models") {
-                    controller.loadMomentModels()
-                }
-                .disabled(controller.loadingMomentModels || controller.processing)
-            }
-        } content: {
-            Text("Finds the strongest moments, frames them, and renders preview and final files.")
-                .foregroundStyle(.secondary)
-            if let source, let analysisCacheDirectory, let exportsDirectory {
-                let needsModel = project.transcript?.hasMeaningfulSpeech ?? source.hasAudio
-                if needsModel {
-                    if !controller.momentModels.isEmpty {
-                        Picker("Moment model", selection: $controller.selectedMomentModelID) {
-                            ForEach(controller.momentModels) { model in Text(model.name).tag(model.id) }
-                        }
-                    } else {
-                        StatusMessage(text: "Load a structured text model for spoken moments.", tone: .neutral)
-                    }
-                }
-                if project.configuration.smartEdit.useVisionForTrickyShots {
-                    if !controller.visionModels.isEmpty {
-                        Picker("Vision model", selection: $controller.selectedVisionModelID) {
-                            ForEach(controller.visionModels) { model in Text(model.name).tag(model.id) }
-                        }
-                    } else {
-                        StatusMessage(text: "Load a structured vision model for uncertain shots.", tone: .neutral)
-                    }
-                }
-                if controller.processing {
-                    // The banner at the top of the workspace carries progress and Cancel.
-                    StatusMessage(text: "Making clips. Progress is shown at the top of this page.", tone: .info)
-                } else {
-                    HStack(spacing: DS.Space.sm) {
-                        Button {
-                            controller.process(project: project, source: source, ingestor: ingestor,
-                                cacheDirectory: analysisCacheDirectory, outputDirectory: exportsDirectory,
-                                save: saveProcessingResult)
-                        } label: {
-                            Label("Process Clips",
-                                  systemImage: "wand.and.stars")
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
-                        .disabled((needsModel && controller.selectedMomentModelID.isEmpty) ||
-                                  (project.configuration.smartEdit.useVisionForTrickyShots &&
-                                   controller.selectedVisionModelID.isEmpty))
-                        if needsModel && controller.selectedMomentModelID.isEmpty {
-                            Text("Load models to enable processing.")
-                                .font(.callout).foregroundStyle(.secondary)
-                        }
-                    }
-                    StatusMessage(text: "Processing uses on-device speech recognition and local analysis. OpenRouter evaluates selected transcript windows and, if enabled, uncertain shots. It uses API credits.",
-                                  tone: .info)
-                }
-            } else {
-                StatusMessage(text: "Locate the original video to process clips.", tone: .neutral)
-            }
-        }
     }
 
     // MARK: Explore
@@ -988,43 +875,6 @@ struct WorkspacePlaybackView: View {
     private static func timeLabel(_ time: MediaTime) -> String {
         let seconds = time.microseconds / 1_000_000
         return "\(seconds / 60):\(String(format: "%02d", seconds % 60))"
-    }
-
-    private var processingBanner: some View {
-        let stages = ProcessingStage.allCases.filter { $0 != .complete }
-        let current = controller.processingProgress?.stage ?? .preparing
-        let index = current == .complete ? stages.count : stages.firstIndex(of: current) ?? 0
-        let fraction = controller.processingProgress?.fraction ?? 0
-        return VStack(alignment: .leading, spacing: DS.Space.sm) {
-            HStack(spacing: DS.Space.sm) {
-                ProgressView().controlSize(.small)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Making clips").font(.headline)
-                    Text("Phase \(min(index + 1, stages.count)) of \(stages.count) · \(current == .preparing ? "Preparing" : current.rawValue)")
-                        .font(.callout).foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button("Cancel") { controller.cancelProcessing() }
-            }
-            Label(project.sourceKind == .local ? "Source ready" : "Download complete",
-                  systemImage: "checkmark.circle.fill")
-                .foregroundStyle(.green)
-            ForEach(Array(stages.enumerated()), id: \.element) { position, stage in
-                Label(stage == .preparing ? "Preparing" : stage.rawValue,
-                      systemImage: position < index ? "checkmark.circle.fill" :
-                        position == index ? "circle.dotted.circle.fill" : "circle")
-                    .foregroundStyle(position < index ? Color.green :
-                        position == index ? Color.primary : Color.secondary)
-                    .accessibilityValue(position < index ? "Done" : position == index ? "In progress" : "Waiting")
-            }
-            TaskProgressRow(label: current == .preparing ? "Preparing…" : "\(current.rawValue)…",
-                            fraction: current == .preparing && fraction == 0 ? nil : fraction)
-            if let detail = controller.processingProgress?.detail {
-                Text(detail).font(.callout).foregroundStyle(.secondary)
-            }
-            StatusMessage(text: "Your clips appear here when rendering finishes.", tone: .info)
-        }
-        .surfaceCard(highlighted: true)
     }
 
     private var analysisStage: String {
