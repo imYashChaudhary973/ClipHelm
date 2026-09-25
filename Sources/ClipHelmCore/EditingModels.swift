@@ -166,7 +166,7 @@ public struct ClipHelmEditSpec: Codable, Equatable, Sendable {
         let resolvedLayout = layout ?? LayoutMode(framing: framingMode)
         guard schemaVersion == Self.currentVersion, (1...10_000).contains(segments.count),
               zip(segments, segments.dropFirst()).allSatisfy({ $0.sourceRange.end <= $1.sourceRange.start }),
-              cropPaths.count <= segments.count,
+              cropPaths.count <= 10_000,
               resolvedLayout.accepts(framingMode),
               (resolvedLayout == .fill || cropPaths.isEmpty),
               (captionStyle != nil || captionTrack == nil),

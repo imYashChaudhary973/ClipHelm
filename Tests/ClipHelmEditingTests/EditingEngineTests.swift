@@ -66,8 +66,8 @@ final class EditingEngineTests: XCTestCase {
         XCTAssertEqual(spec.segments.map(\.sourceRange), try [range(2, 5.2), range(6.8, 60)])
         XCTAssertEqual(spec.layout, .fill)
         XCTAssertEqual(spec.audioOperation, .normalize)
-        XCTAssertEqual(spec.cropPaths.count, 2)
-        XCTAssertEqual(spec.cropPaths.first?.keyframes.count, 2)
+        XCTAssertEqual(spec.cropPaths.count, 3)
+        XCTAssertGreaterThan(spec.cropPaths.first?.keyframes.count ?? 0, 2)
         XCTAssertEqual(spec.captionTrack?.cues.map(\.text), ["Begin", "finish"])
         XCTAssertTrue(spec.captionTrack?.wordByWord == true)
         XCTAssertTrue(spec.captionTrack?.blurIn == true)
@@ -99,6 +99,38 @@ final class EditingEngineTests: XCTestCase {
         XCTAssertThrowsError(try planner.plan(clipID: ClipID(), proposal: valid,
             configuration: config, asset: source, analysis: local,
             transcript: Transcript(assetID: other.id, words: [])))
+    }
+
+    func testPlannerKeepsIndependentCropPathsAcrossSceneCut() throws {
+        let source = try asset(12)
+        let first = try Scene(assetID: source.id, range: range(0, 6))
+        let second = try Scene(assetID: source.id, range: range(6, 12))
+        let left = try SubjectTrack(assetID: source.id, observations: [
+            SubjectObservation(time: time(0), bounds: NormalizedRect(x: 0.05, y: 0.2, width: 0.2, height: 0.4)),
+            SubjectObservation(time: time(2), bounds: NormalizedRect(x: 0.05, y: 0.2, width: 0.2, height: 0.4)),
+            SubjectObservation(time: time(4), bounds: NormalizedRect(x: 0.05, y: 0.2, width: 0.2, height: 0.4)),
+            SubjectObservation(time: time(5), bounds: NormalizedRect(x: 0.05, y: 0.2, width: 0.2, height: 0.4)),
+        ])
+        let right = try SubjectTrack(assetID: source.id, observations: [
+            SubjectObservation(time: time(6), bounds: NormalizedRect(x: 0.75, y: 0.2, width: 0.2, height: 0.4)),
+            SubjectObservation(time: time(8), bounds: NormalizedRect(x: 0.75, y: 0.2, width: 0.2, height: 0.4)),
+            SubjectObservation(time: time(10), bounds: NormalizedRect(x: 0.75, y: 0.2, width: 0.2, height: 0.4)),
+            SubjectObservation(time: time(11), bounds: NormalizedRect(x: 0.75, y: 0.2, width: 0.2, height: 0.4)),
+        ])
+        let local = try AnalysisResult(asset: source, scenes: [first, second], signals: [],
+            detections: [], subjectTracks: [left, right],
+            classifications: [ContentClassification(range: range(0, 12), kind: .conversation, confidence: 0.8)])
+        let proposal = try ClipProposal(assetID: source.id, range: range(0, 12),
+            title: "Cut", rationale: "", confidence: 0.9)
+        let spec = try ClipPlanner().plan(clipID: ClipID(), proposal: proposal,
+            configuration: configuration(), asset: source, analysis: local)
+        XCTAssertEqual(spec.segments.count, 1)
+        XCTAssertEqual(spec.cropPaths.count, 2)
+        XCTAssertGreaterThan(spec.cropPaths[1].keyframes[0].rect.x -
+            spec.cropPaths[0].keyframes[0].rect.x, 0.4)
+        XCTAssertNoThrow(try EditSpecValidator().validate(spec, for: source))
+        XCTAssertEqual(try JSONDecoder().decode(ClipHelmEditSpec.self,
+            from: JSONEncoder().encode(spec)), spec)
     }
 
     func testDemoPreservationAndClassicLayout() throws {
@@ -158,7 +190,7 @@ final class EditingEngineTests: XCTestCase {
         var history = try EditHistory(initial: initial, asset: source, proposal: proposal)
         try history.apply(.remove(range(10, 20)), asset: source, proposal: proposal)
         XCTAssertEqual(history.current.segments.map(\.sourceRange), try [range(0, 10), range(20, 60)])
-        XCTAssertTrue(history.current.cropPaths.isEmpty)
+        XCTAssertEqual(history.current.cropPaths.map(\.sourceRange), try [range(30, 60)])
         XCTAssertTrue(history.canUndo)
         XCTAssertFalse(history.canRedo)
         XCTAssertTrue(history.undo())
