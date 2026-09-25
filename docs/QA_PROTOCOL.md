@@ -1,6 +1,6 @@
 # Rights-cleared production QA protocol
 
-The initial publicly licensed test set is listed in [QA_ASSETS.md](QA_ASSETS.md). It covers a 33-minute 1080p lecture, a 12-minute 4K story, and an animated film. It does not yet cover every representative content type or full 4K long-form processing. Do not import arbitrary downloaded videos into this library without permission.
+The initial licensed/public-domain test set is listed in [QA_ASSETS.md](QA_ASSETS.md). It covers a 33-minute 1080p lecture, a 12-minute 4K story, a 59-minute 4K NASA visual source, and an animated film. It does not yet cover every representative content type or a completed full 4K app workflow. Do not import arbitrary downloaded videos into this library without permission.
 
 ## Source manifest
 

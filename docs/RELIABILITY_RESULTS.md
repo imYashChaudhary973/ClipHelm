@@ -10,6 +10,7 @@ Automated regression evidence exists for cancellation, atomic project saves, a s
 | Cancellation and recovery regression tests | PASS | Existing `ProcessingTests`, `SourceIngestorTests`, `ClipResultsTests`, and project-state tests. |
 | Export capacity preflight regression | PASS | `ClipResultsTests.testBatchExportRejectsInsufficientDiskSpaceWithoutPartialFile`; injected capacity is not a live full-volume failure. |
 | Gateway error sanitization regression | PASS | Mocked OpenRouter tests cover network loss, status failures, and malformed responses; no paid call. |
+| On-device Speech callback and timing regression | PASS | A live authorized sample first crashed XCTest at the Speech authorization callback; after the sendable-callback fix, 60-second and 33-minute speech tests completed. The normal bounded-timestamp regression passes. Distributed-app Speech UI still needs retesting. |
 | Complete external-user workflow | BLOCKED | Authorized media is available. Interactive app access and a real OpenRouter key for speech-based clip discovery are still required. A silent-media pipeline test does not equal this workflow. |
 
 For each live case, record the asset ID, app commit, exact interruption point, expected and observed behavior, files left behind, relaunch result, and corrective action. Follow [QA_PROTOCOL.md](QA_PROTOCOL.md).

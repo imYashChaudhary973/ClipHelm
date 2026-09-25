@@ -38,12 +38,15 @@ final class ProcessingTests: XCTestCase {
     }
 
     func testSilentSourceRunsAllStagesAndRendersWithoutNetwork() async throws {
-        let qaSource = ProcessInfo.processInfo.environment["CLIPHELM_QA_SILENT_SOURCE"]
+        let environment = ProcessInfo.processInfo.environment
+        let qaSource = environment["CLIPHELM_QA_SILENT_SOURCE"]
+        let fourK = environment["CLIPHELM_QA_OUTPUT_4K"] == "1"
         let file = try XCTUnwrap(qaSource.map { URL(fileURLWithPath: $0) } ??
             Bundle.module.url(forResource: "silent-motion", withExtension: "mp4"))
         let ingestor = SourceIngestor()
         let source = try await ingestor.prepare(SourceDescriptor(localFile: file))
-        let configuration = try ClipConfiguration(outputFormat: .vertical,
+        let configuration = try ClipConfiguration(outputFormat: fourK
+            ? OutputFormat(width: 3840, height: 2160) : .vertical,
             framingMode: .classicFullFrame, pacingMode: .natural,
             selectedLengths: [.seconds10to30], requestedClipCount: 1,
             soundMode: .mute, captionStyle: nil,
@@ -77,8 +80,8 @@ final class ProcessingTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: result.clips[0].finalURL.path))
         let final = try await MediaProbe().probe(fileURL: result.clips[0].finalURL,
                                                   displayName: "Final")
-        XCTAssertEqual(final.asset.width, 1080)
-        XCTAssertEqual(final.asset.height, 1920)
+        XCTAssertEqual(final.asset.width, fourK ? 3840 : 1080)
+        XCTAssertEqual(final.asset.height, fourK ? 2160 : 1920)
         if let inspectionPath = ProcessInfo.processInfo.environment["CLIPHELM_INSPECT_OUTPUT"] {
             try FileManager.default.copyItem(at: result.clips[0].finalURL,
                                              to: URL(fileURLWithPath: inspectionPath))
