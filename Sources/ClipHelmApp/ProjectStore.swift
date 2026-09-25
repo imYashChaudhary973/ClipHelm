@@ -320,6 +320,11 @@ final class ProjectStore: ObservableObject {
                         throw ModelError.invalid("ProjectRecord")
                     }
                     loaded.append(record)
+                    do {
+                        try removeInterruptedOutputs(in: package, keeping: record)
+                    } catch {
+                        loadError = "Some interrupted render files could not be removed. The project was kept."
+                    }
                 } catch {
                     loadError = "Some projects could not be opened. Their files were left untouched."
                 }
@@ -328,6 +333,47 @@ final class ProjectStore: ObservableObject {
         } catch {
             loadError = "Projects could not be loaded. Their files were left untouched."
         }
+    }
+
+    private func removeInterruptedOutputs(in package: URL, keeping record: ProjectRecord) throws {
+        let directory = package.appending(path: "Exports", directoryHint: .isDirectory)
+        guard FileManager.default.fileExists(atPath: directory.path) else { return }
+        guard try package.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink != true,
+              try directory.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink != true else {
+            throw ModelError.invalid("Project output location")
+        }
+        let retained = Set(record.clips.flatMap { [$0.previewFileName, $0.finalFileName] })
+        for file in try FileManager.default.contentsOfDirectory(at: directory,
+                    includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey]) {
+            let name = file.lastPathComponent
+            let baseName: String
+            if let sidecar = name.range(of: ".mp4.sb-") {
+                baseName = String(name[..<sidecar.lowerBound]) + ".mp4"
+            } else {
+                baseName = name
+            }
+            guard !retained.contains(baseName), Self.isGeneratedOutputName(baseName) else { continue }
+            let values = try file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+            guard values.isRegularFile == true, values.isSymbolicLink != true else { continue }
+            try FileManager.default.removeItem(at: file)
+        }
+    }
+
+    private static func isGeneratedOutputName(_ name: String) -> Bool {
+        guard name.hasSuffix(".mp4") else { return false }
+        var stem = String(name.dropLast(4))
+        if stem.hasSuffix("-preview") { stem.removeLast("-preview".count) }
+        if UUID(uuidString: stem) != nil { return true }
+        guard stem.hasPrefix("clip-") else { return false }
+        let body = String(stem.dropFirst("clip-".count))
+        if body.count == 40,
+           body.prefix(3).allSatisfy({ $0.isASCII && $0.isNumber }),
+           body.dropFirst(3).first == "-",
+           UUID(uuidString: String(body.suffix(36))) != nil { return true }
+        return body.count == 73 &&
+            UUID(uuidString: String(body.prefix(36))) != nil &&
+            body.dropFirst(36).first == "-" &&
+            UUID(uuidString: String(body.suffix(36))) != nil
     }
 
     func save(draft: ProjectDraft, mediaAsset: MediaAsset? = nil) throws -> ProjectRecord {
